@@ -1,0 +1,495 @@
+/*
+ * Copyright 2024 Cybernetica AS
+ * 
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+/**
+ * Type synonyms
+ */
+
+pub type u8 : Unqualified = uint[0x100];
+pub type b8 : Unqualified = bool[0x100];
+pub type u16 : Unqualified = uint[0x10000];
+pub type b16 : Unqualified = bool[0x10000];
+pub type u32 : Unqualified = uint[0x100000000];
+pub type b32 : Unqualified = bool[0x100000000];
+pub type u64 : Unqualified = uint[0x10000000000000000];
+pub type b64 : Unqualified = bool[0x10000000000000000];
+pub type u128 : Unqualified = uint[0x100000000000000000000000000000000];
+pub type b128 : Unqualified = bool[0x100000000000000000000000000000000];
+
+
+/**
+ * Error reporting
+ */
+
+// Infinite loop
+fn unreachable[T : Qualified]() -> T {
+    unreachable()
+}
+
+pub fn error[@D](msg : string $pre @D) {
+    dbg_assert(false : bool @D, msg);
+}
+
+pub fn undefined[T : Unqualified, $S, @D]() -> T $S @D {
+    error("undefined()" : string @D);
+    unreachable()
+}
+
+/**
+ * Universal operations
+ */
+
+pub fn id[T : Qualified](x : T) -> T { x }
+
+unchecked eff * -> * ! $S
+pub fn univ_assert[N : Nat, $S, @D](x : bool[N] $S @D) 
+where Field[N] {
+  if (post $S) { assert(x); }
+  else { dbg_assert(x); }
+}
+
+unchecked eff * -> * ! $S
+pub fn univ_assert_zero[N : Nat, $S, @D](x : uint[N] $S @D) 
+where Field[N] {
+  if (post $S) { assert_zero(x); }
+  else { dbg_assert(x == 0); }
+}
+
+/**
+ * Logic operations
+ */
+
+// As impl is now a keyword, renamed this function from impl to impli
+pub fn impli[$S, @D, N : Nat](a : bool[N] $S @D, b : bool[N] $S @D) -> bool[N] $S @D {
+    !a | b
+}
+
+pub fn equiv[$S, @D, N : Nat](a : bool[N] $S @D, b : bool[N] $S @D) -> bool[N] $S @D {
+    impli(a,b) & impli(b,a)
+}
+
+/**
+ * Conditionals
+ */
+
+unchecked eff * -> * -> * -> * ! $S
+pub fn uint_cond[M : Nat, N : Nat, $S, @D](b : bool[M] $S @D, x : uint[N] $S @D, y : uint[N] $S @D) -> uint[N] $S @D
+  where Field[N], Convertible[M, N] {
+  if (post $S) {
+    if (@prover <= @D) {
+      b as uint[M] as uint[N] * x + !b as uint[M] as uint[N] * y
+    } else {
+      wire { if (b as bool[N] as $pre) { x as $pre } else { y as $pre } }
+    }
+  } else {
+    if (b) { x } else { y } 
+  }
+}
+
+unchecked eff * -> * -> * -> * ! $S
+pub fn bool_cond[M : Nat, N : Nat, $S, @D](b : bool[M] $S @D, x : bool[N] $S @D, y : bool[N] $S @D) -> bool[N] $S @D 
+  where Field[N], Convertible[M, N] {
+  if (post $S) {
+    if (@prover <= @D) {
+      b as bool[N] & x | !b as bool[N] & y
+    } else {
+      wire { if (b as bool[N] as $pre) { x as $pre } else { y as $pre } }
+    }
+  } else {
+    if (b) { x } else { y }
+  }
+}
+
+pub fn conditional_assert_zero[@D, N : Nat](c : bool[N] $post @D, x : uint[N] $post @D) 
+where Field[N] {
+    assert_zero(c as uint[N] * x);
+}
+
+pub fn conditional_assert[@D, N : Nat](c : bool[N] $post @D, b : bool[N] $post @D) 
+where Field[N] {
+    assert(impli(c, b));
+}
+
+pub fn univ_conditional_assert_zero[@D, $S, N : Nat](c : bool[N] $S @D, x : uint[N] $S @D) 
+where Field[N] {
+    univ_assert_zero(c as uint[N] * x);
+}
+
+pub fn univ_conditional_assert[@D, $S, N : Nat](c : bool[N] $S @D, b : bool[N] $S @D) 
+where Field[N] {
+    univ_assert(impli(c, b));
+}
+
+/**
+ * String manipulation
+ */
+
+// TODO: Operator support in compiler is not currently correct
+// name fixities are being completely ignored.
+pub fn ++[@D](x : string $pre @D, y : string $pre @D) -> string $pre @D
+    infixl 10
+{
+    string_append(x, y)
+}
+
+/**
+ * List operations
+ */
+
+// Qualified types do not always work well with the effect system
+//pub fn foldl_pre[B : Qualified, T : Unqualified, @D, @D1](f : B -> T $pre @D -> B, x : B, xs : list[T $pre @D] $pre @D1) -> B {
+pub fn foldl_pre[B : Unqualified, $SB, @DB, T : Unqualified, @D, @D1](f : B $SB @DB -> T $pre @D -> B $SB @DB, x : B $SB @DB, xs : list[T $pre @D] $pre @D1) -> B $SB @DB 
+where @D1 <= @D {
+    let n = length(xs);
+    let rec mx = for i in 0 .. n + 1 {
+      if (i == 0) { x }
+      else { f(mx[i - 1], xs[i - 1]) }
+    };
+    mx[n]
+}
+
+pub fn foldr_pre[B : Qualified, T : Unqualified, @D, @D1](f : T $pre @D -> B -> B, x : B, xs : list[T $pre @D] $pre @D1) -> B 
+where @D1 <= @D {
+    let n = length(xs);
+    let rec mx = for i in 0 .. n + 1 {
+      if (i == 0) { x }
+      else { f(xs[n - i], mx[i - 1]) }
+    };
+    mx[n]
+}
+
+pub fn zip_with[T1 : Qualified, T2 : Qualified, T3 : Qualified, @D]
+    (f : T1 -> T2 -> T3, xs: list[T1] @D, ys: list[T2] @D) -> list[T3] @D
+{
+    let n = length(xs);
+    let m = length(ys);
+    dbg_assert_eq(n, m, "zip_with expects lists with the same length");
+    for i in 0 .. n {
+        f(xs[i], ys[i])
+    }
+}
+
+pub fn zip_with_upto[T1 : Qualified, T2 : Qualified, T3 : Qualified, @D]
+    (f : T1 -> T2 -> T3, xs: list[T1] @D, ys: list[T2] @D, lim : u64 @D) -> list[T3] @D
+{
+    for i in 0 .. lim {
+        f(xs[i], ys[i])
+    }
+}
+
+pub fn map[T : Qualified, U : Qualified](f : T -> U, l : list[T]) -> list[U] {
+    for i in 0..length(l) { f(l[i]) }
+}
+
+pub fn foldl[A : Qualified, B : Qualified](f : B -> A -> B, x : B, xs : list[A]) -> B {
+    let n = length(xs);
+    let rec mx = for i in 0 .. n + 1 {
+      if (i == 0) { x }
+      else { f(mx[i - 1], xs[i - 1]) }
+    };
+    mx[n]
+}
+
+pub fn foldr[A: Qualified, B : Qualified](f : A -> B -> B, x : B, xs : list[A]) -> B {
+    let n = length(xs);
+    let rec mx = for i in 0 .. n + 1 {
+      if (i == 0) { x }
+      else { f(xs[n - i], mx[i - 1]) }
+    };
+    mx[n]
+}
+
+pub fn reverse_pre[T : Unqualified, @D, @D1](l : list[T $pre @D] $pre @D1) -> list[T $pre @D] $pre @D1 
+    where @D1 <= @D {
+    let len = length(l);
+    for i in 0 .. len {
+        l[len - i - 1]
+    }
+}
+
+pub fn count_pre[T : Unqualified, N : Nat, @D, @D1](l : list[T $pre @D] $pre @D, p : T $pre @D -> bool[N] $pre @D1) -> uint[N] $pre @D1 {
+  foldl_pre(fn (acc, el) { p(el) as uint[N] + acc }, 0, l)
+}
+
+pub fn all_pre[@D, @D1, N : Nat](xs : list[bool[N] $pre @D] $pre @D1) -> bool[N] $pre @D 
+  where @D1 <= @D {
+  foldl_pre(fn (acc, el) { acc & el }, true, xs)
+}
+
+pub fn any_pre[@D, @D1, N : Nat](xs : list[bool[N] $pre @D] $pre @D1) -> bool[N] $pre @D 
+  where @D1 <= @D {
+  foldl_pre(fn (acc, el) { acc | el }, false, xs)
+}
+
+pub fn sum_pre[@D, @D1, N : Nat, A : Qualified -> Unqualified](xs : A[uint[N] $pre @D] $pre @D1) -> uint[N] $pre @D 
+  where @D1 <= @D, Array[A] {
+  let n = length(xs);
+  let rec mx = for i in 0 .. n + 1 {
+    if (i == 0) { 0 }
+    else { mx[i - 1] + xs[i - 1] }
+  };
+  mx[n]
+}
+
+pub fn prod_pre[@D, @D1, N : Nat, A : Qualified -> Unqualified](xs : A[uint[N] $pre @D] $pre @D1) -> uint[N] $pre @D 
+  where @D1 <= @D, Array[A] {
+  let n = length(xs);
+  let rec mx = for i in 0 .. n + 1 {
+    if (i == 0) { 1 }
+    else { mx[i - 1] * xs[i - 1] }
+  };
+  mx[n]
+}
+
+pub fn reverse[X : Qualified](l : list[X]) -> list[X] {
+    let len = length(l);
+    for i in 0 .. len {
+        l[len - i - 1]
+    }
+}
+
+pub fn count[$S, @D, X : Qualified, N : Nat](l : list[X], p : X -> bool[N] $S @D) -> uint[N] $S @D {
+  foldl(fn (acc, el) { p(el) as uint[N] + acc }, 0, l)
+}
+
+pub fn all[$S, @D, N : Nat](xs : list[bool[N] $S @D]) -> bool[N] $S @D {
+    foldl(fn (acc, el) { acc & el }, true, xs)
+}
+
+pub fn any[$S, @D, N : Nat](xs : list[bool[N] $S @D]) -> bool[N] $S @D {
+    foldl(fn (acc, el) { acc | el }, false, xs)
+}
+
+pub fn sum[$S, @D, N : Nat, A : Qualified -> Unqualified](xs : A[uint[N] $S @D] $pre @public) -> uint[N] $S @D 
+    where Array[A] {
+    let n = length(xs);
+    let rec mx = for i in 0 .. n + 1 {
+      if (i == 0) { 0 }
+      else { mx[i - 1] + xs[i - 1] }
+    };
+    mx[n]
+}
+
+pub fn prod[$S, @D, N : Nat, A : Qualified -> Unqualified](xs : A[uint[N] $S @D] $pre @public) -> uint[N] $S @D 
+    where Array[A] {
+    let n = length(xs);
+    let rec mx = for i in 0 .. n + 1 {
+      if (i == 0) { 1 }
+      else { mx[i - 1] * xs[i - 1] }
+    };
+    mx[n]
+}
+
+pub fn scalar_prod[$S, @D, N : Nat](xs : list[uint[N] $S @D], ys : list[uint[N] $S @D], lim : u64 $pre @public) -> uint[N] $S @D {
+    sum(zip_with_upto(fn (x, y) { x * y }, xs, ys, lim))
+}
+
+pub fn sq_sum[$S, @D, N : Nat](xs : list[uint[N] $S @D]) -> uint[N] $S @D {
+    scalar_prod(xs, xs, length(xs))
+}
+
+pub fn group[T : Qualified](xs : list[T], l : u64 $pre @public) -> list[list[T]] {
+    for i in 0 .. length(xs) / l {
+        for j in 0 .. l {
+            xs[i * l + j]
+        }
+    }
+}
+
+pub fn append[T : Qualified](x : list[T], y : list[T]) -> list[T] {
+    for i in 0 .. length(x) + length(y) {
+        if (i < length(x)) {
+            x[i]
+        }
+        else {
+            y[i - length(x)]
+        }
+    }
+}
+
+pub fn concat[T : Qualified](xss : list[list[T]]) -> list[T] {
+    let m = length(xss);
+    let n = length(xss[0]);
+    for i in 0 .. m * n {
+        xss[i / n][i % n]
+    }
+}
+
+fn find_segment(ix : u64 $pre @public, sums : list[u64 $pre @public], start : u64 $pre @public) -> u64 $pre @public {
+  if (sums[start] > ix) { start }
+  else { find_segment(ix, sums, start + 1) }
+}
+
+fn next_indices_with_nonzero[@D](xs : list[u64 $pre @D] $pre @D) -> list[u64 $pre @D] $pre @D
+{ let n = length(xs)
+; let rec mx = for i in 0 .. n + 1 
+  { let j = n - i
+  ; if (i == 0) { n }
+    else if (xs[j] > 0) { j }
+    else { mx[i - 1] }
+  }
+; reverse_pre(mx)
+}
+
+// Concatenation function without sublist length equality or nonemptiness restrictions
+pub fn concat_non_rectangle[T : Qualified](xss : list[list[T]]) -> list[T] 
+{ let n = length(xss)
+; let s = sum(for i in 0 .. n { length(xss[i]) })
+; if (s == 0) { [] }
+  else
+  { let nonempty_idxs = next_indices_with_nonzero(for i in 0 .. n { length(xss[i]) })
+  ; let rec mx = for k in 0 .. s + 1
+    { if (k == 0) { (xss[nonempty_idxs[0]][0],nonempty_idxs[0],0) }
+      else
+      { let r = xss[mx[k - 1].1][mx[k - 1].2]
+      ; if (mx[k - 1].2 + 1 < length(xss[mx[k - 1].1])) { (r,mx[k - 1].1,mx[k - 1].2 + 1) }
+        else { (r,nonempty_idxs[mx[k - 1].1 + 1],0) }
+      }
+    }
+  ; for k in 0 .. s { mx[k + 1].0 }
+  }
+}
+
+fn duplicate_elements[T : Unqualified, $S, @D](amounts : list[u64 $pre @public], xs : list[T $S @D]) -> list[T $S @D] {
+    let twoDimensional : list[list[T $S @D]] = for i in 0 .. length(amounts) {
+        for j in 0 .. amounts[i] {
+            xs[i]
+        }
+    };
+    concat_non_rectangle(twoDimensional)
+}
+
+pub fn duplicate_indices(amounts : list[u64 $pre @public]) -> list[u64 $pre @public] {
+    let twoDimensional : list[list[u64 $pre @public]] = for i in 0 .. length(amounts) {
+        for j in 0 .. amounts[i] {
+            i
+        }
+    };
+    concat_non_rectangle(twoDimensional)
+}
+
+// Merge two sorted lists
+pub fn merge[N : Nat, @D](xs : list[uint[N] $pre @D], ys : list[uint[N] $pre @D]) -> list[uint[N] $pre @D] {
+  let n = length(xs);
+  let m = length(ys);
+  let xsd = xs as @D;
+  let ysd = ys as @D;
+  let rec tx : list[tuple[uint[N] $pre @D,u64 $pre @D,u64 $pre @D]] = for k in 0 .. n + m + 1 {
+    if (k == 0) { (0,0,0) }
+    else if (tx[k - 1].1 == n as @D) { (ysd[tx[k - 1].2],tx[k - 1].1,tx[k - 1].2 + 1) }
+    else if (tx[k - 1].2 == m as @D) { (xsd[tx[k - 1].1],tx[k - 1].1 + 1,tx[k - 1].2) }
+    else if (xsd[tx[k - 1].1] <= ysd[tx[k - 1].2]) { (xsd[tx[k - 1].1],tx[k - 1].1 + 1,tx[k - 1].2) }
+    else { (ysd[tx[k - 1].2],tx[k - 1].1,tx[k - 1].2 + 1) }
+  };
+  for k in 0 .. n + m { tx[k + 1].0 }
+}
+
+fn treefold[N : Nat, @D](xss : list[list[uint[N] $pre @D]]) -> list[uint[N] $pre @D] {
+  let n = length(xss);
+  if (n == 0) { [] }
+  else if (n == 1) { xss[0] }
+  else { 
+    let q = (n / 2) + (n % 2);
+    let pairwise_merged = for i in 0 .. q { 
+      if (2 * i + 1 >= n) { xss[2 * i] }
+      else { merge(xss[2 * i], xss[2 * i + 1]) }
+    };
+    treefold(pairwise_merged)
+  }
+}
+
+fn sorted_seeds[N : Nat, @D](xs : list[uint[N] $pre @D]) -> list[list[uint[N] $pre @D]] {
+  for i in 0 .. length(xs) { [xs[i]] }
+}
+
+// Merge sort
+pub fn sort[@D, N : Nat](xs : list[uint[N] $pre @D]) -> list[uint[N] $pre @D] {
+  treefold(sorted_seeds(xs))
+}
+
+// Add an element to the end of a list, increasing the length of the list by 1.
+unchecked eff [*] -> * -> * ! @D
+pub extern fn list_push[Q : Qualified, @D](ref xs : list[Q] $pre @D, x : Q);
+
+/**
+ * Domain and stage conversions
+ */
+
+pub fn list_to_public_length[T : Unqualified, @D](xs : list[T $pre @D] $pre @D, n : u64 $pre @public) -> list[T $pre @D] $pre @public {
+  for i in 0 .. n { xs[i as @D] }
+}
+
+pub fn pre_uint_list_to_post_array[N : Nat, @D](xs : list[uint[N] $pre @D] $pre @D, n : u64 $pre @public) -> arr[uint[N] $post @D] $pre @public 
+  where Field[N], Vectorization {
+  array_to_post(freeze(list_to_public_length(xs, n)))
+}
+
+pub fn bool_list_to_post[N : Nat, @D](xs : list[bool[N] $pre @D]) -> list[bool[N] $post @D] 
+where Field[N] {
+    for i in 0 .. length(xs) { wire { xs[i] } }
+}
+
+pub fn uint_list_to_post[N : Nat, @D](xs : list[uint[N] $pre @D]) -> list[uint[N] $post @D] 
+where Field[N] {
+    for i in 0 .. length(xs) { wire { xs[i] } }
+}
+
+pub fn bool_list_to_pre[N : Nat, $S, @D](xs : list[bool[N] $S @D]) -> list[bool[N] $pre @D] {
+  for i in 0 .. length(xs) { xs[i] as $pre }
+}
+
+pub fn uint_list_to_pre[N : Nat, $S, @D](xs : list[uint[N] $S @D]) -> list[uint[N] $pre @D] {
+    for i in 0 .. length(xs) { xs[i] as $pre }
+}
+
+pub fn uint_list_to_prover[N : Nat, $S, @D](xs : list[uint[N] $S @D]) -> list[uint[N] $S @prover] {
+    for i in 0 .. length(xs) { xs[i] as @prover }
+}
+
+pub fn bool_list_to_prover[N : Nat, $S, @D](xs : list[bool[N] $S @D]) -> list[bool[N] $S @prover] {
+    for i in 0 .. length(xs) { xs[i] as @prover }
+}
+
+pub fn bool_list_to_uint[N : Nat, $S, @D](xs : list[bool[N] $S @D]) -> list[uint[N] $S @D] {
+    for i in 0 .. length(xs) { xs[i] as uint[N] }
+}
+
+pub fn uint_ensure_post[N : Nat, $S, @D](x : uint[N] $S @D) -> uint[N] $post @D
+  where Field[N] {
+  if (post $S) { x } else { wire { x } }
+}
+
+pub fn bool_ensure_post[N : Nat, $S, @D](x : bool[N] $S @D) -> bool[N] $post @D
+  where Field[N] {
+  if (post $S) { x } else { wire { x } }
+}
+
+unchecked eff * -> * ! $S
+pub fn uint_downcast[N : Nat, $S, @D](n : uint[N] $pre @D) -> uint[N] $S @D 
+  where Field[N] {
+  if (post $S) { wire { n } } else { n }
+}
+
+unchecked eff * -> * ! $S
+pub fn bool_downcast[N : Nat, $S, @D](b : bool[N] $pre @D) -> bool[N] $S @D 
+  where Field[N] {
+  if (post $S) { wire { b } } else { b }
+}
+
+/**
+ * Challenges
+ */
+
+unchecked eff * -> [*] ! @public
+pub fn nonzero_challenge[P : Nat](n : uint $pre @public) -> list[uint[P] $pre @verifier]
+  where Field[P], Challenge[P] {
+  let res : list[uint[P] $pre @verifier] = challenge(n);
+  if (prod(res) == 0) { nonzero_challenge(n) } else { res }
+}

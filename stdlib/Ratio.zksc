@@ -1,0 +1,409 @@
+use Std::*;
+use Integer::*;
+use Inequalities::*;
+use FixedPoint::*;
+
+// The implementation assumes that N>8.
+// Size asserters should have as large bit width as possible, i.e., log2(N)-2.
+// The lim field should be computed by the limit function.
+
+// assumes that denominator is always positive
+// numerator should be 0..lim/2-1 (positive fractions) or N-lim/2..N-1 (negative fractions)
+pub struct Ratio[N : Nat, $S, @D] 
+{ numerator : uint[N] $S @D
+, denominator : uint[N] $pre @public
+, lim : uint[N] $S @public
+}
+
+pub fn limit[N : Nat, $S]() -> uint[N] $S @public
+where Field[N] 
+{ let bw = log2(N) - 2
+; let val : uint $pre @public = sqrt(pow_pre_inf(2, bw))
+; uint_downcast(val as uint[N])
+}
+
+pub fn ratio_to_pre[N : Nat, $S, @D]
+( xr : Ratio[N, $S, @D]
+) -> Ratio[N, $pre, @D]
+{ Ratio
+  { numerator: xr.numerator as $pre
+  , denominator: xr.denominator
+  , lim: xr.lim as $pre
+  }
+}
+
+pub fn ratio_to_string[N : Nat, $S, @D]
+( xr : Ratio[N, $S, @D]
+) -> string $pre @D
+{ let xr_pre = ratio_to_pre(xr)
+; let num_str = if (xr_pre.numerator as uint < N / 2) { to_string(xr_pre.numerator) } 
+  else { "-" ++ to_string(-xr_pre.numerator) }
+; let den_str = to_string(xr_pre.denominator) as @D
+; num_str ++ ("/" ++ den_str)
+}
+
+fn check_overfull3[N : Nat, $S, @D]
+( n : uint[N] $S @D
+, lim : uint[N] $S @public
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) 
+where Field[N] 
+{ if (post $S)
+  { if (@prover <= @D)
+    { let n_checked = check_size(n, ref sizeasserter)
+    ; let lim_checked = Checked { val: lim as @prover }
+    ; assert_lt'(n_checked, lim_checked, ref sizeasserter)
+    }
+    else { assert(wire { n as $pre < lim as $pre as @D }) }
+  }
+  else { dbg_assert(n < lim as $D) }
+}
+
+fn check_overfull[N : Nat, @D]
+( n : uint[N] $pre @D
+, lim : uint[N] $pre @public
+) 
+where Field[N]
+{ let mut sizeasserter = sizeasserter_new(0)
+; check_overfull3(n, lim, ref sizeasserter)
+} 
+
+fn check_numerator_overfull3[N : Nat, $S, @D]
+( n : uint[N] $S @D
+, lim : uint[N] $S @public
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+)
+where Field[N]
+{ let half_lim = uint_downcast(lim as $pre / 2)
+; check_overfull3(n + half_lim as @D, lim, ref sizeasserter)
+}
+
+fn check_numerator_overfull[N : Nat, @D]
+( n : uint[N] $pre @D
+, lim : uint[N] $pre @public
+)
+where Field[N]
+{ let mut sizeasserter = sizeasserter_new(0)
+; check_numerator_overfull3(n, lim, ref sizeasserter)
+}
+
+fn check_denominator_overfull[N : Nat]
+( n : uint[N] $pre @public
+, lim : uint[N] $pre @public
+)
+where Field[N]
+{ check_overfull(n, lim)
+}
+
+pub fn ratio3[N : Nat, $S, @D]
+( n : uint[N] $S @D
+, m : uint[N] $pre @public
+, lim : uint[N] $S @public
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> Ratio[N, $S, @D]
+where Field[N] 
+{ dbg_assert(!(m == 0))
+; check_numerator_overfull3(n, lim, ref sizeasserter)
+; check_denominator_overfull(m, lim as $pre)
+; Ratio 
+  { numerator: n
+  , denominator: m
+  , lim: lim
+  }
+}
+
+pub fn ratio[N : Nat, @D]
+( n : uint[N] $pre @D
+, m : uint[N] $pre @public
+, lim : uint[N] $pre @public
+) -> Ratio[N, $pre, @D]
+where Field[N]
+{ let mut sizeasserter = sizeasserter_new(0)
+; ratio3(n, m, lim, ref sizeasserter)
+}
+
+pub fn uint_to_ratio3[N : Nat, $S, @D]
+( n : uint[N] $S @D
+, lim : uint[N] $S @public
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> Ratio[N, $S, @D] 
+where Field[N] 
+{ ratio3(n, 1, lim, ref sizeasserter)
+}
+
+pub fn uint_to_ratio[N : Nat, @D]
+( n : uint[N] $pre @D
+, lim : uint[N] $pre @public
+) -> Ratio[N, $pre, @D]
+where Field[N]
+{ let mut sizeasserter = sizeasserter_new(0)
+; uint_to_ratio3(n, lim, ref sizeasserter)
+}
+
+pub fn mult_ratio3[N : Nat, $S, @D]
+( xr : Ratio[N, $S, @D]
+, yr : Ratio[N, $S, @D]
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> Ratio[N, $S, @D] 
+where Field[N] 
+{ let new_numerator = xr.numerator * yr.numerator
+; let new_denominator = xr.denominator * yr.denominator
+; let new_lim = xr.lim
+; ratio3(new_numerator, new_denominator, new_lim, ref sizeasserter)
+}
+
+pub fn mult_ratio[N : Nat, @D]
+( xr : Ratio[N, $pre, @D]
+, yr : Ratio[N, $pre, @D]
+) -> Ratio[N, $pre, @D]
+where Field[N]
+{ let mut sizeasserter = sizeasserter_new(0)
+; mult_ratio3(xr, yr, ref sizeasserter)
+}
+
+pub fn add_ratio3[N : Nat, $S, @D]
+( xr : Ratio[N, $S, @D]
+, yr : Ratio[N, $S, @D]
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> Ratio[N, $S, @D] 
+where Field[N] 
+{ let new_denominator = xr.denominator * yr.denominator / gcd(xr.denominator, yr.denominator)
+; let new_lim = xr.lim
+; let xe = new_denominator / xr.denominator
+; let ye = new_denominator / yr.denominator
+; let xp = xr.numerator * uint_downcast(xe) as @D
+; let yp = yr.numerator * uint_downcast(ye) as @D
+; let new_numerator = xp + yp
+; ratio3(new_numerator, new_denominator, new_lim, ref sizeasserter)
+}
+
+pub fn add_ratio[N : Nat, @D]
+( xr : Ratio[N, $pre, @D]
+, yr : Ratio[N, $pre, @D]
+) -> Ratio[N, $pre, @D]
+where Field[N]
+{ let mut sizeasserter = sizeasserter_new(0)
+; add_ratio3(xr, yr, ref sizeasserter)
+}
+
+pub fn negate_ratio[N : Nat, $S, @D]
+( xr : Ratio[N, $S, @D]
+) -> Ratio[N, $S, @D]
+where Field[N] 
+{ let half_lim = uint_downcast(xr.lim as $pre / 2)
+; univ_assert(!is_zero(xr.numerator + half_lim as @D))
+; Ratio 
+  { numerator: -xr.numerator
+  , denominator: xr.denominator
+  , lim: xr.lim
+  }
+}
+
+pub fn sub_ratio3[N : Nat, $S, @D]
+( xr : Ratio[N, $S, @D]
+, yr : Ratio[N, $S, @D]
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> Ratio[N, $S, @D]
+where Field[N] 
+{ add_ratio3(xr, negate_ratio(yr), ref sizeasserter)
+}
+
+pub fn sub_ratio[N : Nat, @D]
+( xr : Ratio[N, $pre, @D]
+, yr : Ratio[N, $pre, @D]
+) -> Ratio[N, $pre, @D]
+where Field[N]
+{ add_ratio(xr, negate_ratio(yr))
+}
+
+pub fn lt_ratio3[N : Nat, $S, @D]
+( xr : Ratio[N, $S, @D]
+, yr : Ratio[N, $S, @D]
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> bool[N] $S @D
+where Field[N] 
+{ univ_assert_zero(xr.lim - yr.lim)
+; let xu = xr.numerator * uint_downcast(yr.denominator) as @D
+; let yu = yr.numerator * uint_downcast(xr.denominator) as @D
+; let half_bwmax = pow_pre(2, sizeasserter.bw - 1)
+; lt3(xu + half_bwmax, yu + half_bwmax, ref sizeasserter)
+}
+
+pub fn lt_ratio[N : Nat, @D]
+( xr : Ratio[N, $pre, @D]
+, yr : Ratio[N, $pre, @D]
+) -> bool[N] $pre @D
+where Field[N]
+{ let mut sizeasserter = sizeasserter_new(0)
+; lt_ratio3(xr, yr, ref sizeasserter)
+}
+
+pub fn gt_ratio3[N : Nat, $S, @D]
+( xr : Ratio[N, $S, @D]
+, yr : Ratio[N, $S, @D]
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> bool[N] $S @D
+where Field[N] 
+{ lt_ratio3(yr, xr, ref sizeasserter)
+}
+
+pub fn gt_ratio[N : Nat, @D]
+( xr : Ratio[N, $pre, @D]
+, yr : Ratio[N, $pre, @D]
+) -> bool[N] $pre @D
+where Field[N]
+{ lt_ratio(yr, xr)
+}
+
+pub fn le_ratio3[N : Nat, $S, @D]
+( xr : Ratio[N, $S, @D]
+, yr : Ratio[N, $S, @D]
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> bool[N] $S @D
+where Field[N] 
+{ !lt_ratio3(yr, xr, ref sizeasserter)
+}
+
+pub fn le_ratio[N : Nat, @D]
+( xr : Ratio[N, $pre, @D]
+, yr : Ratio[N, $pre, @D]
+) -> bool[N] $pre @D
+where Field[N]
+{ !lt_ratio(yr, xr)
+}
+
+pub fn ge_ratio3[N : Nat, $S, @D]
+( xr : Ratio[N, $S, @D]
+, yr : Ratio[N, $S, @D]
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> bool[N] $S @D
+where Field[N] 
+{ !lt_ratio3(xr, yr, ref sizeasserter)
+}
+
+pub fn ge_ratio[N : Nat, @D]
+( xr : Ratio[N, $pre, @D]
+, yr : Ratio[N, $pre, @D]
+) -> bool[N] $pre @D
+where Field[N]
+{ !lt_ratio(xr, yr)
+}
+
+pub fn eq_ratio[N : Nat, $S, @D]
+( xr : Ratio[N, $S, @D]
+, yr : Ratio[N, $S, @D]
+) -> bool[N] $S @D
+where Field[N] 
+{ let xu = xr.numerator * uint_downcast(yr.denominator) as @D
+; let yu = yr.numerator * uint_downcast(xr.denominator) as @D
+; eq(xu, yu)
+}
+
+pub fn neq_ratio[N : Nat, $S, @D]
+( xr : Ratio[N, $S, @D]
+, yr : Ratio[N, $S, @D]
+) -> bool[N] $S @D
+where Field[N] 
+{ !eq_ratio(xr, yr)
+}
+
+fn normalize_numerator_pre[N : Nat, @D]
+( num : uint[N] $pre @D
+, den : uint[N] $pre @public
+, n : uint[N] $pre @public
+) -> uint[N] $pre @D 
+where Field[N]
+{ div_signed(n as @D * num, den as @D)
+}
+
+fn check_normalize_numerator3[N : Nat]
+( num : uint[N] $post @prover
+, den : uint[N] $pre @public
+, x : uint[N] $post @prover
+, n : uint[N] $pre @public
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) 
+where Field[N] 
+{ let n_post = (wire { n }) as @prover
+; let den_post = (wire { den }) as @prover
+; let zero_approx = n_post * num - x * den_post
+; let zero_approx_checked = check_size(zero_approx, ref sizeasserter)
+; let den_checked = Checked { val: den_post }
+; assert_lt'(zero_approx_checked, den_checked, ref sizeasserter)
+}
+
+fn normalize_numerator3[N : Nat, $S, @D]
+( num : uint[N] $S @D
+, den : uint[N] $pre @public
+, n : uint[N] $pre @public
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> uint[N] $S @D
+where Field[N] 
+{ let res = uint_downcast(normalize_numerator_pre(num as $pre, den, n))
+; if (post $S) { if (@prover <= @D) { check_normalize_numerator3(num, den, res, n, ref sizeasserter) } }
+; res
+}
+
+pub fn with_denominator3[N : Nat, $S, @D]
+( xr : Ratio[N, $S, @D]
+, n : uint[N] $pre @public
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> Ratio[N, $S, @D]
+where Field[N] 
+{ let new_lim = xr.lim
+; let new_denominator = n
+; let new_numerator = normalize_numerator3(xr.numerator, xr.denominator, n, ref sizeasserter)
+; ratio3(new_numerator, new_denominator, new_lim, ref sizeasserter)
+}
+
+pub fn with_denominator[N : Nat, @D]
+( xr : Ratio[N, $pre, @D]
+, n : uint[N] $pre @public
+) -> Ratio[N, $pre, @D]
+where Field[N]
+{ let mut sizeasserter = sizeasserter_new(0)
+; with_denominator3(xr, n, ref sizeasserter)
+}
+
+pub fn fixed_from_ratio3[N : Nat, $S, @D]
+( xr : Ratio[N, $S, @D]
+, len : u64 $pre @public
+, pplen : u64 $pre @public
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> Fixed[N, $S, @D] 
+where Field[N] 
+{ let ppmax = pow_pre_inf(2, pplen)
+; let fbw = (log2(N) - 2) as u64
+; let coef = normalize_numerator3(xr.numerator, xr.denominator, uint_downcast(ppmax as uint[N]), ref sizeasserters[fbw])
+; fixed3(coef, len, pplen, ref sizeasserters)
+}
+
+pub fn fixed_from_ratio[N : Nat, @D]
+( xr : Ratio[N, $pre, @D]
+, len : u64 $pre @public
+, pplen : u64 $pre @public
+) -> Fixed[N, $pre, @D]
+where Field[N]
+{ let mut sizeasserters = sizeasserters_new(0)
+; fixed_from_ratio3(xr, len, pplen, ref sizeasserters)
+}
+
+pub fn fixed_to_ratio3[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+, lim : uint[N] $S @public
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> Ratio[N, $S, @D]
+where Field[N] 
+{ let num = x.coef
+; let den = pow_pre_inf(2, x.pplen)
+; ratio3(num, den as uint[N], lim, ref sizeasserter)
+}
+
+pub fn fixed_to_ratio[N : Nat, @D]
+( x : Fixed[N, $pre, @D]
+, lim : uint[N] $pre @public
+) -> Ratio[N, $pre, @D]
+where Field[N]
+{ let mut sizeasserter = sizeasserter_new(0)
+; fixed_to_ratio3(x, lim, ref sizeasserter)
+}

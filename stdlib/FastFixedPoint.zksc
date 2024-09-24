@@ -1,0 +1,499 @@
+// Fixed-point scalars that can be used with the fixed-point vectors in FastFixedPointVec.zksc.
+// The version of struct Fixed in FixedPoint.zksc uses SizeAsserters, which are not compatible with FastFixedPointVec.zksc.
+
+use Std::*;
+use Integer::*;
+use OldInequalities::*;
+use Bitextract::*;
+
+// coef must fit into len bits
+// N must have at least 2*len+1 bits for all operations to be usable
+// Some operations (e.g. addition, subtraction, comparison) can be used with a smaller N
+pub struct Fixed[N : Nat, $S, @D] {
+  coef : uint[N] $S @D, // can be in the range -2^(len-1) .. 2^(len-1)-1 (mod N)
+  len : u64 $pre @public,
+  pplen : u64 $pre @public,
+}
+
+unchecked eff * -> * -> * ! $S
+fn check_fit[N : Nat, $S, @D](coef : uint[N] $S @D, len : u64 $pre @public) 
+  where Field[N] {
+  if (post $S) {
+    // we must check that coef is in the range -2^(len-1) .. 2^(len-1)-1 (mod N)
+    // so we add 2^(len-1) to it and instead check that it is in the range 0 .. 2^len-1
+    if (@prover <= @D) {
+        let coef = coef + ((wire{pow_pre(2 : uint[N] $pre @public, len-1)}) as @D);
+        let trash = bitextract(coef, len);
+    } else {
+        let coef = coef as $pre + (pow_pre(2 : uint[N] $pre @public, len-1)) as @D;
+        dbg_assert(coef < pow_pre(2, len));
+    }
+  } else {
+    let coef = coef + pow_pre(2 : uint[N] $pre @D, len-1);
+    dbg_assert(coef < pow_pre(2, len));
+  }
+}
+
+// used for multiplication, which rounds down instead of to the nearest value
+fn check_fit_unsigned[N : Nat, $S, @D](coef : uint[N] $S @D, len : u64 $pre @public) 
+  where Field[N] {
+  if (post $S) {
+    if (@prover <= @D) {
+      let trash = bitextract(coef, len);
+    } else { dbg_assert(coef as $pre < pow_pre(2, len)); }
+  } else { dbg_assert(coef < pow_pre(2, len)); }
+}
+
+// Assumes that N is prime and 2^len is less than N/2, and both arguments fit to len bits
+fn assert_lt[N : Nat, $S, @D](x : uint[N] $S @D, y : uint[N] $S @D, len : u64 $pre @public) 
+  where Field[N] {
+  check_fit_unsigned(y - x, len);
+  univ_assert(!is_zero(y - x));
+}
+
+pub fn fixed[N : Nat, $S, @D](coef : uint[N] $S @D, len : u64 $pre @public, pplen : u64 $pre @public) -> Fixed[N, $S, @D]
+  where Field[N] {
+  check_fit(coef, len);
+  Fixed {
+    coef : coef,
+    len : len,
+    pplen : pplen,
+  }
+}
+
+// this checks that fixed point number is nonnegative, i.e. in the range 0 .. 2^(len-1)-1
+pub fn fixed_nonnegative[N : Nat, $S, @D](coef : uint[N] $S @D, len : u64 $pre @public, pplen : u64 $pre @public) -> Fixed[N, $S, @D]
+  where Field[N] {
+  check_fit_unsigned(coef, len-1);
+  Fixed {
+    coef : coef,
+    len : len,
+    pplen : pplen,
+  }
+}
+
+pub fn uint_to_fixed[N : Nat, $S, @D](n : uint[N] $S @D, len : u64 $pre @public, pplen : u64 $pre @public) -> Fixed[N, $S, @D]
+  where Field[N] {
+  fixed(n * pow_pre(2, pplen), len, pplen)
+}
+
+// If x.coef == -2^(len-1) then there will be overflow which is not checked
+pub fn negate_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D]) -> Fixed[N, $S, @D]
+  where Field[N] {
+  Fixed {
+    coef : -x.coef,
+    len : x.len,
+    pplen : x.pplen,
+  }
+}
+
+pub fn check_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D])
+  where Field[N] {
+  check_fit(x.coef, x.len);
+}
+
+// This does not check for overflow, as overflow checking would make addition much slower.
+// The programmer has to ensure that overflow cannot occur, or call check_fixed manually.
+pub fn add_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D], y : Fixed[N, $S, @D]) -> Fixed[N, $S, @D] 
+  where Field[N] {
+  dbg_assert(x.len == y.len & x.pplen == y.pplen);
+  Fixed {
+    coef : x.coef + y.coef,
+    len : x.len,
+    pplen : x.pplen,
+  }
+}
+
+pub fn sub_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D], y : Fixed[N, $S, @D]) -> Fixed[N, $S, @D]
+  where Field[N] {
+  add_fixed(x, negate_fixed(y))
+}
+
+// uint[N] is interpreted as values in the range -N/2 .. N-N/2-1 instead of 0 .. N-1
+pub fn signed_uintN_to_uint[N : Nat, @D](x : uint[N] $pre @D) -> uint $pre @D {
+  // N/2 is temporarily added to make negative numbers positive, so that they are converted correctly
+  // N/2 needs to computed in uint as N would be zero in uint[N]
+  ((x + (((N : uint $pre @D)/2) as uint[N])) as uint) - N/2
+}
+
+fn coef_mult_pre[N : Nat, @D](x : uint[N] $pre @D, y : uint[N] $pre @D, len : u64 $pre @public, pplen : u64 $pre @public) -> uint[N] $pre @D {
+  let z = x * y;
+  // we need to convert to uint to get signed division as uint[N] only has unsigned division
+  let z = signed_uintN_to_uint(z);
+  let z = z / pow_pre_inf(2, pplen);
+  z as uint[N]
+}
+
+fn check_coef_mult[N : Nat, @D](x : uint[N] $post @D, y : uint[N] $post @D, z : uint[N] $post @D, pplen : u64 $pre @public) 
+  where Field[N] {
+  check_fit_unsigned(x * y - z * (wire{pow_pre(2 : uint[N] $pre @public, pplen)}) as @D, pplen);
+}
+
+unchecked eff * -> * -> * -> * -> * ! $S
+fn coef_mult[N : Nat, $S, @D](x : uint[N] $S @D, y : uint[N] $S @D, len : u64 $pre @public, pplen : u64 $pre @public) -> uint[N] $S @D 
+  where Field[N] {
+  if (post $S) {
+    let res = wire { coef_mult_pre(x as $pre, y as $pre, len, pplen) };
+    if (@prover <= @D) { check_coef_mult(x, y, res, pplen) };
+    res
+  } else { coef_mult_pre(x, y, len, pplen) }
+}
+
+pub fn mult_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D], y : Fixed[N, $S, @D]) -> Fixed[N, $S, @D] 
+  where Field[N] {
+  dbg_assert(x.len == y.len & x.pplen == y.pplen);
+  let new_len = x.len;
+  let new_pplen = x.pplen;
+  let new_coef = coef_mult(x.coef, y.coef, new_len, new_pplen);
+  fixed(new_coef, new_len, new_pplen)
+}
+
+// multiplication without rounding, this increases len and fails if 2^len becomes greater than N
+pub fn mult_fixed_exact[N : Nat, $S, @D](x : Fixed[N, $S, @D], y : Fixed[N, $S, @D]) -> Fixed[N, $S, @D] 
+  where Field[N] {
+  let new_len = x.len + y.len;
+  dbg_assert(pow_pre_inf(2 : uint $pre @public, new_len) <= N);
+  Fixed {
+    coef : x.coef * y.coef,
+    len : new_len,
+    pplen : x.pplen + y.pplen,
+  }
+}
+
+// reduce pplen by rounding towards minus infinity
+pub fn round_down_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D], new_len : u64 $pre @public, new_pplen : u64 $pre @public) -> Fixed[N, $S, @D]
+  where Field[N] {
+    let num_bits_to_round = x.pplen - new_pplen;
+    dbg_assert(x.pplen >= new_pplen);
+    let rounding_factor = pow_pre_inf(2 : uint $pre @public, num_bits_to_round);
+    let new_coef = uint_downcast((signed_uintN_to_uint(x.coef as $pre) / (rounding_factor as @D)) as uint[N]);
+    dbg_assert(pow_pre_inf(2 : uint $pre @public, num_bits_to_round + new_len) < N); // check that new_coef * rounding_factor cannot overflow the modulus
+    check_fit_unsigned(x.coef - new_coef * (uint_downcast(rounding_factor as uint[N]) as @D), num_bits_to_round);
+    fixed(new_coef, new_len, new_pplen)
+}
+
+// floor(x) as integer
+pub fn round_down_fixed_to_int[N : Nat, $S, @D](x : Fixed[N, $S, @D]) -> uint[N] $S @D
+  where Field[N] {
+    let y = round_down_fixed(x, x.len - x.pplen, 0);
+    y.coef
+}
+
+// ceil(x) as integer
+pub fn round_up_fixed_to_int[N : Nat, $S, @D](x : Fixed[N, $S, @D]) -> uint[N] $S @D
+  where Field[N] {
+    let one = uint_downcast(pow_pre(2 : uint[N] $pre @public, x.pplen)) as @D;
+    let y = Fixed { coef : x.coef + one - 1, len : x.len, pplen : x.pplen };
+    round_down_fixed_to_int(y)
+}
+
+pub fn round_fixed_to_nearest_int[N : Nat, $S, @D](x : Fixed[N, $S, @D]) -> uint[N] $S @D
+  where Field[N] {
+    dbg_assert(x.pplen >= 1);
+    let half = uint_downcast(pow_pre(2 : uint[N] $pre @public, x.pplen - 1)) as @D;
+    let y = Fixed { coef : x.coef + half, len : x.len, pplen : x.pplen };
+    round_down_fixed_to_int(y)
+}
+
+pub fn increase_len_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D], new_len : u64 $pre @public) -> Fixed[N, $S, @D]
+  where Field[N] {
+    dbg_assert(new_len >= x.len);
+    Fixed {
+        coef : x.coef,
+        len : new_len,
+        pplen : x.pplen,
+    }
+}
+
+// should have same result as mult_fixed
+pub fn mult_fixed_alternative[N : Nat, $S, @D](x : Fixed[N, $S, @D], y : Fixed[N, $S, @D]) -> Fixed[N, $S, @D] 
+  where Field[N] {
+    dbg_assert(x.len == y.len & x.pplen == y.pplen); // this restriction can be removed
+    round_down_fixed(mult_fixed_exact(x, y), x.len, x.pplen)
+}
+
+pub fn coef_div_pre[N : Nat, @D](x : uint[N] $pre @D, y : uint[N] $pre @D, pplen : u64 $pre @public) -> uint[N] $pre @D {
+    // we need to convert to uint to get signed division as uint[N] only has unsigned division
+    let x = signed_uintN_to_uint(x);
+    // although y should be positive, we still need to use signed_uintN_to_uint in case a malicious prover has made it negative
+    let y = signed_uintN_to_uint(y);
+    let p = pow_pre_inf(2 : uint $pre @D, pplen);
+    // it's important to first multiply then divide, or else you lose precision
+    ((x * p) / y) as uint[N]
+}
+
+// Assumes that N is prime
+fn check_coef_div[N : Nat, @D](x : uint[N] $post @D, y : uint[N] $post @D, z : uint[N] $post @D, len : u64 $pre @public, pplen : u64 $pre @public) 
+  where Field[N] {
+  // check (4) which shows that 2^k * a - b*c < b
+  // to compare t := 2^k * a - b*c and b, i check if
+  // b - t remains in len (negative values are large numbers in the 2^{len+1} field)s
+  // if t > b, then it would not fit for that reason.
+  // however in order to do so, i must first check that t > 0 (fits in len)
+  // otherwise subtracting a very large number from b (eg -1) 
+  let kk : uint[N] $post @public = wire{pow_pre(2,pplen)};
+  let t = x*kk as @D - y*z;
+  check_fit_unsigned(t,len);
+  assert_lt(t, y, len);
+}
+
+unchecked eff * -> * -> * -> * -> * ! $S
+fn coef_div[N : Nat, $S, @D](x : uint[N] $S @D, y : uint[N] $S @D, len : u64 $pre @public, pplen : u64 $pre @public) -> uint[N] $S @D 
+    where Field [N]{
+    if (post $S) {
+        let res = wire{coef_div_pre(x as $pre,y as $pre,pplen)};
+        if (@prover <= @D) { check_coef_div(x, y, res, len, pplen); }
+        res
+    } else {coef_div_pre(x,y,pplen)}
+}
+
+// Assumes N is prime.
+// Necessary since check_coef_div relies on assert_lt, which relies on is_zero.
+pub fn div_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D], y : Fixed[N, $S, @D]) -> Fixed[N, $S, @D] 
+  where Field[N] {
+  dbg_assert(x.len == y.len & x.pplen == y.pplen);
+  let new_len = x.len;
+  let new_pplen = x.pplen;
+
+  // check (5) which shows that y != 0
+  // No $post check needed, since check_coef_div covers it with assert_lt(t,y,len) and check_fit_unsigned(t,len).
+  dbg_assert(y.coef as $pre != 0);
+
+  // if y is negative, we multiply both x and y by (-1), which does not change the result
+  // but ensures that t in check_coef_div will be nonnegative;
+  // A malicious prover can change the bit is_negative but this will cause
+  // the check_bit_unsigned(t,len) in check_coef_div to fail because t is negative,
+  // unless t == 0 in which case it does not affect the result because there is no rounding.
+  // assert_lt(t, y, len) in check_coef_div also requires t and y to be nonnegative.
+  // In the extreme case, x may become 2^(len-1), which does not fit into signed len-bit integer
+  // but this should not be a problem as temporary values still fit into uint[N].
+  let is_negative : bool $pre @D = signed_uintN_to_uint(y.coef as $pre) < 0;
+  let multiplier : uint[N] $S @D = uint_cond(bool_downcast(is_negative as bool[N]), -1, 1);
+  
+  let new_coef = coef_div(x.coef * multiplier, y.coef * multiplier, new_len, new_pplen);
+
+  // check (3) that -2^(n-1) <= c < 2^(n-1)
+  check_fit(new_coef,new_len);
+  
+  Fixed {
+    coef : new_coef,
+    len : new_len,
+    pplen : new_pplen
+  }
+}
+
+// signed comparison for uint[N], i.e. x and y are interpreted as bw-bit signed integers in the range -2^(bw-1) .. 2^(bw-1)-1
+pub fn lt_signed[$S, @D, N : Nat](x : uint[N] $S @D, y : uint[N] $S @D, bw : u64 $pre @public) -> bool[N] $S @D where Field[N] {
+  let a = uint_downcast(pow_pre(2 : uint[N] $pre @public, bw-1)) as @D;
+  lt(x + a, y + a, bw)
+}
+
+// This is correct if 2^common_len <= N
+pub fn lt_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D], y : Fixed[N, $S, @D]) -> bool[N] $S @D 
+  where Field[N] {
+  dbg_assert(x.len == y.len & x.pplen == y.pplen);
+  let common_len = x.len;
+  lt_signed(x.coef, y.coef, common_len)
+}
+
+pub fn gt_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D], y : Fixed[N, $S, @D]) -> bool[N] $S @D 
+  where Field[N] {
+  lt_fixed(y, x)
+}
+
+pub fn le_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D], y : Fixed[N, $S, @D]) -> bool[N] $S @D 
+  where Field[N] {
+  !lt_fixed(y, x)
+}
+
+pub fn ge_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D], y : Fixed[N, $S, @D]) -> bool[N] $S @D 
+  where Field[N] {
+  !lt_fixed(x, y)
+}
+
+pub fn eq_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D], y : Fixed[N, $S, @D]) -> bool[N] $S @D 
+  where Field[N] {
+  dbg_assert(x.len == y.len & x.pplen == y.pplen);
+  eq(x.coef, y.coef)
+}
+
+pub fn neq_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D], y : Fixed[N, $S, @D]) -> bool[N] $S @D 
+  where Field[N] {
+  !eq_fixed(x, y)
+}
+
+pub fn fixed_pre[N : Nat, $S, @D](f : Fixed[N, $S, @D]) -> Fixed[N, $pre, @D] {
+    Fixed {
+        coef : f.coef as $pre,
+        len : f.len,
+        pplen : f.pplen
+    }
+}
+
+pub fn fixed_post[N : Nat, $S, @D](x : Fixed[N, $S, @D]) -> Fixed[N, $post, @D]
+  where Field[N] {
+  if (pre $S){
+    Fixed {
+      coef : wire{x.coef},
+      len : x.len,
+      pplen : x.pplen
+    }
+  } else {x}
+}
+
+pub fn fixed_prover[N : Nat, $S, @D](x : Fixed[N, $S, @D]) -> Fixed[N, $S, @prover]
+  where Field[N] {
+  Fixed {
+    coef : x.coef as @prover,
+    len : x.len,
+    pplen : x.pplen
+  }
+}
+
+pub fn fixed_verifier[N : Nat, $S](x : Fixed[N, $S, @public]) -> Fixed[N, $S, @verifier]
+  where Field[N] {
+  Fixed {
+    coef : x.coef as @verifier,
+    len : x.len,
+    pplen : x.pplen
+  }
+}
+
+pub fn fixed_to_bitstring[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+) -> string $pre @D
+where Field[N] 
+{ let f = fixed_pre(x)
+; let coef = if (f.coef as uint < N / 2) { f.coef } else { f.coef + pow_pre(2, f.len) }
+; let coef_bits = bitextract_pre(coef, f.len)
+; let rec ss : list[string $pre @D] = for i in 0 .. f.len + 1
+  { if (i == 0) { "" }
+    else if (i == f.pplen + 1) { "." ++ ss[f.pplen] }
+    else
+    { let k = if (i <= f.pplen) { i - 1 } else { i - 2 }
+    ; let b : string $pre @D = if (coef_bits[k]) { "1" } else { "0" }
+    ; b ++ ss[i - 1]
+    }
+  }
+; ss[f.len]
+}
+
+pub fn fixed_to_string[N : Nat, $S, @D](f : Fixed[N, $S, @D]) -> string $pre @D
+  where Field[N] {
+  let coef_pre = signed_uintN_to_uint(f.coef as $pre);
+  let sign = coef_pre < 0;
+  let coef = if (sign) { -coef_pre } else { coef_pre };
+  let pplennr = pow_pre_inf(2,f.pplen);
+  let wholes = coef / pplennr;
+  let s_sign = if (sign) {"-"} else {""};
+  let s : string $pre @D = s_sign ++ (to_string(wholes)++".");
+
+  s ++ fractional_string(coef - wholes*pplennr,pplennr,false)
+}
+
+fn fractional_string[N : Nat, @D](coef : uint[N] $pre @D, pplennr : uint[N] $pre @D,nonempty : bool[N] $pre @D) -> string $pre @D {
+  if (coef == 0) {
+    if (nonempty) {""} else {"0"}
+  } else {
+      let fractional_part = coef * 10;
+      let whole = fractional_part / pplennr;
+      let remaining = fractional_part - whole*pplennr;
+      to_string(whole) ++ fractional_string(remaining,pplennr,true)
+  }
+}
+
+pub fn fixed_cond[N : Nat, $S, @D](b : bool[N] $S @D, x : Fixed[N, $S, @D], y : Fixed[N, $S, @D]) -> Fixed[N, $S, @D]
+  where Field[N] {
+    dbg_assert(x.len == y.len);
+    dbg_assert(x.pplen == y.pplen);
+    Fixed {
+        coef : uint_cond(b,x.coef,y.coef),
+        len : x.len,
+        pplen : x.pplen
+    }
+} 
+
+pub fn min_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D], y : Fixed[N, $S, @D]) -> Fixed[N, $S, @D]
+  where Field[N] {
+    fixed_cond(lt_fixed(x, y), x, y)
+}
+
+pub fn max_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D], y : Fixed[N, $S, @D]) -> Fixed[N, $S, @D]
+  where Field[N] {
+    fixed_cond(lt_fixed(x, y), y, x)
+}
+
+//assumes that N is prime due to use of eq
+fn sqrt_fixed_pre_coef[N : Nat, @D](x : Fixed[N, $pre, @D]) -> uint[N] $pre @D
+  where Field[N] {
+    let zero_flag : bool[N] $pre @D = eq(x.coef, 0);
+    dbg_assert(signed_uintN_to_uint(x.coef) >= 0);
+    if (zero_flag) {
+        x.coef
+    } else {
+        let p2k = pow_pre(2,x.pplen) : uint[N] $pre @D;
+        let current = if (x.coef < p2k) { p2k } else { x.coef };
+        sqrt_helper_fixed_coef(x.coef, current, x.len, p2k)
+    }
+}
+
+pub fn sqrt_fixed_pre[N : Nat, @D](x : Fixed[N, $pre, @D]) -> Fixed[N, $pre, @D]
+  where Field[N] {
+    fixed_nonnegative(sqrt_fixed_pre_coef(x), x.len, x.pplen)
+}
+
+fn sqrt_helper_fixed_coef[N : Nat, @D](init : uint[N] $pre @D, current : uint[N] $pre @D, len : u64 $pre @public, p2k : uint[N] $pre @D) -> uint[N] $pre @D
+  where Field[N] {
+    //(x^2+u*2^k)/(2x)
+    let next = (current * current + init * p2k) / (2 * current);
+    let len' = len - 1; // length without the sign bit
+    if (le(current, next, 2 * len' + 1)) {
+        current
+    } else {
+        sqrt_helper_fixed_coef(init, next, len, p2k)
+    }
+}
+
+fn sqrt_helper_fixed[N : Nat, @D](init : uint[N] $pre @D, current : uint[N] $pre @D, len : u64 $pre @public, pplen : u64 $pre @public, p2k : uint[N] $pre @D) -> Fixed[N, $pre, @D]
+  where Field[N] {
+  fixed_nonnegative(sqrt_helper_fixed_coef(init, current, len, p2k), len, pplen)
+}
+
+fn check_coef_sqrt[N : Nat, @D](x : Fixed[N, $post, @D], res : Fixed[N, $post, @D])
+  where Field[N] {
+    let len' = x.len-1; // length without the sign bit
+    //inequality checks use the same principle as in check_coef_div
+    //negative values underflow into the larger int[N] field values, and will not fit in len' bits 
+
+    // check that x is nonnegative
+    check_fit_unsigned(x.coef,len');
+
+    //check (1): x < 2^n is granted by other functions
+    //check (2): c < 2^n
+    check_fit_unsigned(res.coef,len');
+    
+    let res_sq : uint[N] $post @D = res.coef * res.coef;
+    let pow2k = wire{pow_pre(2,x.pplen) : uint[N] $pre @public}; 
+    
+    let middle = x.coef * pow2k as @D - res_sq;
+    let right = res.coef*2 + 1;
+
+    // res.coef fits into len' bits, so res.coef*2+1 fits into len'+1 bits
+    let len'' = len'+1;
+ 
+    //check (3): 0 <= x * 2^2k - c^2 
+    check_fit_unsigned(middle,len'');
+
+    //check (4): x*2^2k - c^2 < 2c+1
+    assert_lt(middle, right, len'');
+}
+
+unchecked eff [*,*,*] -> [*,*,*] ! $S
+pub fn sqrt_fixed[N : Nat, $S, @D](x : Fixed[N, $S, @D]) -> Fixed[N, $S, @D]
+  where Field[N] {
+  if (post $S) {
+    let res = fixed_post(sqrt_fixed_pre(fixed_pre(x)));
+    if (@prover <= @D) { check_coef_sqrt(x,res)}
+    res
+  } else {sqrt_fixed_pre(x)}
+}

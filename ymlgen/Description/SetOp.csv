@@ -1,0 +1,3 @@
+"assert_subset_norep","Assertion that all numbers occurring in the first list occur in the second list at least once."
+"assert_subset","Assertion that all numbers occurring in the first list occur in the second list at least as many times."
+"assert_disjoint","Assertion that the two given lists have no common elements. Fails if either argument list contains an element that is not representable using the number of bits specified in the given SizeAsserter object."

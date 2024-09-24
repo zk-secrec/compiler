@@ -1,0 +1,15 @@
+version 2.0.0;
+configuration;
+
+@plugin iter_v0;
+
+@type field(equals(2));
+@type field(greater_than(0x1000000000000000));
+
+@challenge(1);
+
+// Conversion from large Mersenne fields (type 1) to Booleans (type 0) and back
+@convert(@out: 0, @in: 1);
+@convert(@out: 1, @in: 0);
+
+

@@ -1,0 +1,1014 @@
+/*
+ * Copyright 2024 Cybernetica AS
+ * 
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+use Integer::*;
+use JsonNode::*;
+use JsonParseNode::*;
+use JsonRule::*;
+use Std::*;
+use Store::*;
+use String::*;
+use Waksman::*;
+
+pub struct Config {
+  block_size: uint $pre @public,
+  key_max_length: uint $pre @public,
+  rule_count: uint $pre @public,
+}
+
+pub struct JsonWitness[N : Nat] {
+  chars: String[$post, @prover, N],
+  raw: list[uint[N] $post @prover],
+  parse_nodes: list[ParseNode[N]],
+  json_nodes: list[JSONNode[N]],
+  config: Config,
+}
+
+pub struct JSON[N : Nat] {
+  nodes: list[JSONNode[N]] $pre @public,
+  chars: String[$post, @prover, N],
+  ptr: uint[N] $post @prover,
+  config: Config,
+  roJsonUpPtrStore : Store[N, $post, @prover],
+  roJsonCharPtrStore : Store[N, $post, @prover],
+  roJsonIdStore : Store[N, $post, @prover],
+  roJsonNumValueStore : Store[N, $post, @prover],
+  roJsonTypeStore : Store[N, $post, @prover],
+  nodeTreeCharEndStore : Store[N, $post, @prover],
+  nodeTreeCharStartStore : Store[N, $post, @prover],
+  nodeTreeJSONEndStore : Store[N, $post, @prover],
+  nodeTreeJSONStartStore : Store[N, $post, @prover],
+  nodeTreeNumValueStore : Store[N, $post, @prover],
+  nodeTreeRawEndStore : Store[N, $post, @prover],
+  nodeTreeRawStartStore : Store[N, $post, @prover],
+  nodeTreeRuleStore : Store[N, $post, @prover],
+  nodeTreeUpStore : Store[N, $post, @prover],
+  ruleConsumeCharStore : Store[N, $post, @prover],
+  ruleConsumeJSONStore : Store[N, $post, @prover],
+  ruleLHSStore : Store[N, $post, @prover],
+  ruleLabelStore : Store[N, $post, @prover],
+  ruleRHS1Store : Store[N, $post, @prover],
+  ruleRHS2Store : Store[N, $post, @prover],
+  rawStore : Store[N, $post, @prover],
+  charsStore : Store[N, $post, @prover],
+}
+
+pub fn JSON_new[N : Nat](input : JsonWitness[N]) -> JSON[N] where Finite[N] {
+  JSON{
+    nodes: input.json_nodes,
+    chars: input.chars,
+    ptr: 0,
+    config: input.config,
+    roJsonUpPtrStore : {#},
+    roJsonCharPtrStore : {#},
+    roJsonIdStore : {#},
+    roJsonNumValueStore : {#},
+    roJsonTypeStore : {#},
+    nodeTreeCharEndStore : {#},
+    nodeTreeCharStartStore : {#},
+    nodeTreeJSONEndStore : {#},
+    nodeTreeJSONStartStore : {#},
+    nodeTreeNumValueStore : {#},
+    nodeTreeRawEndStore : {#},
+    nodeTreeRawStartStore : {#},
+    nodeTreeRuleStore : {#},
+    nodeTreeUpStore : {#},
+    ruleConsumeCharStore : {#},
+    ruleConsumeJSONStore : {#},
+    ruleLHSStore : {#},
+    ruleLabelStore : {#},
+    ruleRHS1Store : {#},
+    ruleRHS2Store : {#},
+    rawStore : {#},
+    charsStore : {#},
+  }
+}
+
+fn JSON_get_node[N : Nat](
+  ref json : JSON[N],
+) -> JSONNode[N] {
+  //index_JSONNode(json.nodes, json.ptr as uint[N])
+  let idx = json.ptr as uint[N];
+  JSONNode {
+    upPtr: Store_get(ref json.roJsonUpPtrStore, idx),
+    numValue: Store_get(ref json.roJsonNumValueStore, idx),
+    jsonType: Store_get(ref json.roJsonTypeStore, idx),
+    id: Store_get(ref json.roJsonIdStore, idx),
+    charPtr: Store_get(ref json.roJsonCharPtrStore, idx)
+  }
+}
+
+pub fn JSON_get_type[N : Nat](
+  ref json : JSON[N],
+) -> uint[N] $post @prover {
+  JSON_get_node(
+    ref json,
+  ).jsonType
+}
+
+pub fn JSON_get_number_value[N : Nat](
+  ref json : JSON[N],
+) -> uint[N] $post @prover {
+  JSON_get_node(
+    ref json,
+  ).numValue
+}
+
+pub fn JSON_get_string[N : Nat](
+  ref json : JSON[N],
+  maxLen : uint $pre @public,
+) -> String[$post, @prover, N]
+  where Finite[N]
+{
+  let node = JSON_get_node(ref json);
+
+  dbg_print(JSONNode_to_string(node));
+  string_substring(json.chars, node.charPtr, node.numValue, maxLen)
+}
+
+pub fn JSON_get_length[N : Nat](
+  ref json : JSON[N],
+) -> uint[N] $post @prover {
+  JSON_get_number_value(
+    ref json,
+  )
+}
+
+pub fn JSON_get_nth_element[N : Nat](
+  ref json : JSON[N],
+  idx : uint[N] $post @prover,
+)
+  where Finite[N]
+{
+  dbg_print("get_nth_element" : string);
+  dbg_print(string_append("json.ptr: ", to_string(json.ptr as $pre)));
+  dbg_print(string_append("idx: ", to_string(idx as $pre)));
+  let mut idxStart : uint $pre @prover = -1;
+  for i in 1..length(json.nodes) {
+    let i = length(json.nodes) - 1 - i;
+    let node = (json.nodes)[i];
+    dbg_print(to_string(node.upPtr as $pre));
+    if node.upPtr as $pre as uint == json.ptr as $pre as uint {
+      idxStart = i as @prover;
+    };
+  };
+  dbg_print(string_append("idxStart: ", to_string(idxStart as $pre)));
+  let idxStart = wire { idxStart as uint[N] };
+  //let childrenStart = index_JSONNode(json.nodes, idxStart);
+  let childrenStart = Store_get(ref json.roJsonUpPtrStore, idxStart);
+  //let childrenStartCutoff = index_JSONNode(json.nodes, idxStart - 1);
+  let childrenStartCutoff = Store_get(ref json.roJsonUpPtrStore, idxStart - 1);
+
+  dbg_assert(childrenStart as $pre != childrenStartCutoff as $pre);
+  assert(neq(childrenStart, childrenStartCutoff));
+
+  dbg_assert(childrenStart as $pre == json.ptr as $pre);
+  assert_zero(childrenStart - json.ptr);
+
+  let newIdx = idxStart + idx;
+  //let element = index_JSONNode(json.nodes, newIdx);
+  let element = Store_get(ref json.roJsonUpPtrStore, newIdx);
+
+  dbg_assert(element as $pre == json.ptr as $pre);
+  assert_zero(element - json.ptr);
+
+  json.ptr = newIdx;
+}
+
+/*
+*  Finds member with the key from a JSON object.
+*  Arguments:
+*  json - JSON node pointing at a JSON object
+*  key - key to look up
+*
+*  Returns: JSON member that corresponds to the key
+*/
+pub fn JSON_get_field[N : Nat](
+  ref json : JSON[N],
+  key : String[$post, @public, N],
+)
+  where Finite[N]
+{
+  let node = JSON_get_node(
+    ref json,
+  );
+  let key' : String[$pre, @prover, N] = String {
+    chars: for i in 0..length(key.chars) {
+      key.chars[i] as @prover as $pre
+    },
+    len: key.len as @prover as $pre
+  };
+  let proverKey = String {
+    chars: for i in 0..length(key.chars) {
+      key.chars[i] as @prover
+    },
+    len: key.len as @prover
+  };
+
+  let preChars = String {
+    chars: for i in 0..length(json.chars.chars) {json.chars.chars[i] as $pre},
+    len: json.chars.len as $pre
+  };
+
+  let mut memIdx : uint $pre @prover = -1;
+  let mut valIdx : uint $pre @prover = -1;
+  for i in 0..length(json.nodes) {
+    let node = (json.nodes)[i];
+    let str = string_substring(preChars, node.charPtr as $pre, node.numValue as $pre, json.config.key_max_length);
+    let keysMatch = string_eq(str, key', json.config.key_max_length) as bool;
+    if (node.upPtr as $pre == json.ptr as $pre) as bool & keysMatch {
+      memIdx = i as @prover;
+    };
+  };
+
+  for i in 0..length(json.nodes) {
+    let node = (json.nodes)[i];
+    if (node.upPtr as $pre as uint == memIdx) {
+      valIdx = i as @prover;
+    };
+  };
+
+  let memIdx = wire{memIdx as uint[N]};
+  let valIdx = wire{valIdx as uint[N]};
+  let mut start : uint[N] $post @prover = -1;
+  let mut len : uint[N] $post @prover = -1;
+
+  for i in 0..length(json.nodes) {
+    let node = (json.nodes)[i];
+    let i' = (wire{i as uint[N]}) as @prover;
+    conditional_assert_zero(eq(memIdx, i'), node.upPtr - json.ptr);
+    conditional_assert_zero(eq(valIdx, i'), node.upPtr - memIdx);
+
+    let notMem = neq(memIdx, i') as uint[N];
+    start = notMem * start + (1 - notMem) * node.charPtr;
+    len = notMem * len + (1 - notMem) * node.numValue;
+  }
+
+  let memKey = string_substring(json.chars, start, len, json.config.key_max_length);
+  string_assert_eq(proverKey, memKey, json.config.key_max_length);
+
+  json.ptr = valIdx;
+}
+
+pub fn JSON_get_raw[N : Nat](
+  ref json : JSON[N],
+  wit : JsonWitness[N],
+  maxLen : uint $pre @public,
+) -> String[$post, @prover, N]
+  where Finite[N]
+{
+  let parseNodes : list[ParseNode[N]] = wit.parse_nodes;
+  let poPtr : uint[N] $post @prover = Store_get(ref json.roJsonIdStore, json.ptr as uint[N]);
+  dbg_print(string_append("poPtr: ", to_string(poPtr as $pre)));
+  let ptIdx' : uint[N] $post @prover = wire {
+    let mut ptIdx : uint[N] $pre @prover = -1;
+    for i in 0..length(parseNodes) {
+      let i = length(parseNodes) - 1 - i;
+      let node : ParseNode[N] = (parseNodes)[i];
+      dbg_print(string_append("node.jsonStart: ", to_string(node.jsonStart as $pre)));
+      let consumeJSON = Store_get(ref json.ruleConsumeJSONStore, node.rule);
+      dbg_print(string_append("consumeJSON: ", to_string(consumeJSON as $pre)));
+      let matches : bool $pre @prover = (eq(node.jsonStart, poPtr) & neq(consumeJSON, -1)) as $pre as bool;
+      //ptIdx = if (matches) { i as uint[N] as @prover } else { ptIdx };
+      if (matches) {
+        ptIdx = i as uint[N] as @prover;
+      };
+    };
+    ptIdx
+  };
+  dbg_print(string_append("ptIdx: ", to_string(ptIdx' as $pre)));
+  let jsonStart = Store_get(ref json.nodeTreeJSONStartStore, ptIdx');
+  dbg_print(string_append("jsonStart: ", to_string(jsonStart as $pre)));
+  let rawStart = Store_get(ref json.nodeTreeRawStartStore, ptIdx');
+  dbg_print(string_append("rawStart: ", to_string(rawStart as $pre)));
+  let rawEnd = Store_get(ref json.nodeTreeRawEndStore, ptIdx');
+  dbg_print(string_append("rawEnd: ", to_string(rawEnd as $pre)));
+  let rule = Store_get(ref json.nodeTreeRuleStore, ptIdx');
+  dbg_print(string_append("rule: ", to_string(rule as $pre)));
+  dbg_print(string_append("node.rule: ", to_string(ptIdx' as $pre)));
+  dbg_assert(jsonStart as $pre == poPtr as $pre);
+  assert_zero(jsonStart - poPtr);
+  let consumeJSON = Store_get(ref json.ruleConsumeJSONStore, rule);
+  dbg_assert(consumeJSON as $pre != -1);
+  assert    (neq(consumeJSON, -1));
+  dbg_print(string_append("rawStart: ", to_string(rawStart as $pre)));
+  dbg_print(string_append("rawEnd: ", to_string(rawEnd as $pre)));
+  let str = for i in 0..maxLen {
+    let i' : uint[N] $post @public = wire { i as uint[N] };
+    Store_get(ref json.rawStore, i' as @prover + rawStart)
+  };
+  String {
+    chars: str,
+    len: rawEnd - rawStart,
+  }
+}
+
+pub fn loadJSON[N : Nat](
+  input : JsonWitness[N],
+  ref json : JSON[N]
+)
+  where Finite[N]
+{
+  dbg_print("Loading JSON" : string);
+  let blockSizeBits : uint $pre @public = field_bit_width(input.config.block_size);
+  // Turn the input into structs
+  let nodeTree : list[ParseNode[N]] $pre @public = input.parse_nodes;
+  json.chars = input.chars;
+
+  // Parse tree stores
+  dbg_print("Parse tree stores" : string);
+  for i in 0..length(nodeTree) {
+    let node = nodeTree[i];
+    let idx : uint[N] $post @prover = (wire{i as uint[N]}) as @prover;
+    Store_set(ref json.nodeTreeUpStore, idx, node.up);
+    Store_set(ref json.nodeTreeJSONStartStore, idx, node.jsonStart);
+    Store_set(ref json.nodeTreeJSONEndStore, idx, node.jsonEnd);
+    Store_set(ref json.nodeTreeRuleStore, idx, node.rule);
+    Store_set(ref json.nodeTreeRawStartStore, idx, node.rawStart);
+    Store_set(ref json.nodeTreeRawEndStore, idx, node.rawEnd);
+    Store_set(ref json.nodeTreeCharStartStore, idx, node.charStart);
+    Store_set(ref json.nodeTreeCharEndStore, idx, node.charEnd);
+    Store_set(ref json.nodeTreeNumValueStore, idx, node.numValue);
+  };
+
+  // Rule stores
+  dbg_print("Rule stores" : string);
+  let rules_post_pre = loadRules();
+  let rules : list[Rule[N]] = rules_post_pre.0;
+  for i in 0..length(rules) {
+    let rule = rules[i];
+    let idx : uint[N] $post @prover = (wire{i as uint[N]}) as @prover;
+    Store_set(ref json.ruleLHSStore, idx, rule.lhs);
+    Store_set(ref json.ruleRHS1Store, idx, rule.rhs1);
+    Store_set(ref json.ruleRHS2Store, idx, rule.rhs2);
+    Store_set(ref json.ruleConsumeCharStore, idx, rule.consumeChar);
+    Store_set(ref json.ruleConsumeJSONStore, idx, rule.consumeJSON);
+    Store_set(ref json.ruleLabelStore, idx, rule.label);
+  }
+  //dbg_assert(false : bool);
+
+  // JSON stores
+  dbg_print("JSON stores" : string);
+  let mut jsonVals : list[JSONNode[N]] = input.json_nodes;
+  let mut jsonNumValueStore = {#};
+  let mut jsonCharPtrStore = {#};
+  let mut jsonTypeStore = {#};
+  let mut jsonIdStore = {#};
+  let mut jsonUpPtrStore = {#};
+  for i in 0..length(input.json_nodes) {
+    let idx : uint[N] $post @prover = (wire{i as uint[N]}) as @prover;
+    let node = jsonVals[i];
+    Store_set(ref jsonNumValueStore, idx, node.numValue);
+    Store_set(ref jsonCharPtrStore, idx, node.charPtr);
+    Store_set(ref jsonTypeStore, idx, node.jsonType);
+    Store_set(ref jsonIdStore, idx, node.id);
+    Store_set(ref jsonUpPtrStore, idx, node.upPtr);
+  };
+
+  // Raw store
+  dbg_print("Raw store" : string);
+  for i in 0..length(input.raw) {
+    let idx : uint[N] $post @prover = (wire{i as uint[N]}) as @prover;
+    Store_set(ref json.rawStore, idx, input.raw[i]);
+  };
+
+  // Chars store
+  dbg_print("Chars store" : string);
+  for i in 0..length(input.chars.chars) {
+    let idx : uint[N] $post @prover = (wire{i as uint[N]}) as @prover;
+    Store_set(ref json.charsStore, idx, input.chars.chars[i]);
+  };
+
+  let BLOCK_SIZE : uint[N] $post @public = wire{input.config.block_size as uint[N]};
+  let ruleCountBits : uint $pre @public = field_bit_width(input.config.rule_count);
+  // Ensure that block size matches the parse tree
+  dbg_assert(nodeTree[0].rawStart as $pre == 0);
+  assert_zero(nodeTree[0].rawStart);
+  dbg_assert(nodeTree[0].rawEnd as $pre == BLOCK_SIZE as @prover as $pre);
+  assert_zero(nodeTree[0].rawEnd - (BLOCK_SIZE as @prover));
+
+  dbg_print("Generating parents" : string);
+  let parents : list[ParseNode[N]] = for i in 0..(length(nodeTree)-1)/2-1 {
+    let idx = (i+1)*2;
+    let x = nodeTree[idx];
+    let up : uint[N] $post @prover = x.up;
+    let upVal = Store_get(ref json.nodeTreeUpStore, up);
+    let jsonStart = Store_get(ref json.nodeTreeJSONStartStore, up);
+    let jsonEnd = Store_get(ref json.nodeTreeJSONEndStore, up);
+    ParseNode {
+      up: upVal,
+      up_bits: bitextract(upVal, blockSizeBits+1),
+      rule:     Store_get(ref json.nodeTreeRuleStore, up),
+      rawStart: Store_get(ref json.nodeTreeRawStartStore, up),
+      rawEnd:   Store_get(ref json.nodeTreeRawEndStore, up),
+      jsonStart: jsonStart,
+      jsonEnd: jsonEnd,
+      jsonStart_bits: bitextract(jsonStart, blockSizeBits),
+      jsonEnd_bits: bitextract(jsonEnd, blockSizeBits),
+      numValue:  Store_get(ref json.nodeTreeNumValueStore, up),
+      charStart: Store_get(ref json.nodeTreeCharStartStore, up),
+      charEnd:   Store_get(ref json.nodeTreeCharEndStore, up)
+    }
+  };
+  dbg_print("Parents list size:" : string);
+  dbg_print(to_string(length(parents)));
+  dbg_print("Generating JSON node parents" : string);
+  let jsonParents = for i in 0..length(jsonVals) {
+    if i == 0 {
+      jsonVals[0]
+    } else {
+      let x = jsonVals[i];
+      let idx : uint[N] $post @prover = x.upPtr as uint[N];
+      dbg_print(string_append("idx: ", to_string(idx as $pre)));
+      JSONNode {
+        upPtr:    Store_get(ref jsonUpPtrStore, idx),
+        numValue: Store_get(ref jsonNumValueStore, idx),
+        charPtr:  Store_get(ref jsonCharPtrStore, idx),
+        jsonType: Store_get(ref jsonTypeStore, idx),
+        id:       Store_get(ref jsonIdStore, idx),
+      }
+    }
+  };
+
+  // Reorder JSON nodes in breadth-first order
+  dbg_print("Reordering JSON nodes in breadth-first order" : string);
+  let upIndices : list[uint[N] $pre @prover] = for i in 0..length(jsonVals) {
+    if i == 0 {
+      0
+    } else {
+      jsonVals[i].upPtr as $pre * input.config.block_size as @prover as uint[N] + i as @prover as uint[N]
+    }
+  };
+  for i in 0..length(upIndices) {
+    dbg_print("upIndices" ++ ( to_string(i as @prover) ++ ( ": " ++ ( to_string(upIndices[i] as $pre)  ))) );
+  };
+  let reorderSwitches : list[bool[N] $post @prover] = get_switches_for_sorting(upIndices);
+  let permNw = make_waksman_network(length(jsonVals));
+  let roJSONTypes = apply_switching_network_uint(for i in 0..length(jsonVals) {
+    jsonVals[i].jsonType
+  }, permNw, reorderSwitches);
+  let roNumValues = apply_switching_network_uint(for i in 0..length(jsonVals) {
+    jsonVals[i].numValue
+  }, permNw, reorderSwitches);
+  let roCharPtrs = apply_switching_network_uint(for i in 0..length(jsonVals) {
+    jsonVals[i].charPtr
+  }, permNw, reorderSwitches);
+  let roUpPtrs : list[uint[N] $post @prover] = apply_switching_network_uint(for i in 0..length(jsonVals) {
+    jsonVals[i].upPtr
+  }, permNw, reorderSwitches);
+  let roIds : list[uint[N] $post @prover] = apply_switching_network_uint(for i in 0..length(jsonVals) {
+    jsonVals[i].id
+  }, permNw, reorderSwitches);
+  let mut roJsonUpPtrStore = {#};
+  for i in 0..length(roUpPtrs) {
+    Store_set(ref roJsonUpPtrStore, (wire{i as uint[N]}) as @prover, roUpPtrs[i]);
+  };
+
+  for i in 0..length(roUpPtrs) {
+    dbg_print("roUpPtrs" ++ ( to_string(i as @prover) ++ ( ": " ++ ( to_string(roUpPtrs[i] as $pre)  ))) );
+  };
+  let roIdxs : list[uint[N] $post @prover] = apply_switching_network_uint(for i in 0..length(jsonVals){
+    wire { i as @prover as uint[N] }
+  }, permNw, reorderSwitches);
+  let mut inverseNw : list[uint[N] $pre @prover] $pre @prover = (for i in 0..input.config.block_size { input.config.block_size as @prover as uint[N] }) as @prover;
+  for i in 0..length(roIdxs) {
+    let j = roIdxs[i] as $pre as uint;
+    inverseNw[j] = i as uint[N] as @prover;
+  };
+  let roJSONVals : list[JSONNode[N]] = for i in 0..length(jsonVals) {
+    let preIdx = roUpPtrs[i] as $pre as uint;
+    let roIdx = if preIdx == input.config.block_size as @prover {
+      input.config.block_size as @prover as uint[N]
+    } else {
+      inverseNw[preIdx]
+    };
+    dbg_print(string_append("roIdx: ", to_string(roIdx as $pre)));
+    let res = JSONNode {
+      jsonType: roJSONTypes[i],
+      numValue: roNumValues[i],
+      charPtr: roCharPtrs[i],
+      upPtr: wire{roIdx},
+      id: roIds[i],
+    };
+    dbg_print(JSONNode_to_string(res));
+    res
+  };
+
+  for i in 0..length(roJSONVals) {
+    let idx : uint[N] $post @prover = (wire{i as uint[N]}) as @prover;
+    dbg_print("-----" : string);
+    dbg_print(string_append("jsonType: ", to_string(roJSONVals[i].jsonType as $pre)));
+    dbg_print(string_append("numValue: ", to_string(roJSONVals[i].numValue as $pre)));
+    dbg_print(string_append("charPtr: ", to_string(roJSONVals[i].charPtr as $pre)));
+    dbg_print(string_append("upPtr: ", to_string(roJSONVals[i].upPtr as $pre)));
+    dbg_print(string_append("id: ", to_string(roJSONVals[i].id as $pre)));
+    Store_set(ref json.roJsonTypeStore, idx, roJSONVals[i].jsonType);
+    Store_set(ref json.roJsonNumValueStore, idx, roJSONVals[i].numValue);
+    Store_set(ref json.roJsonCharPtrStore, idx, roJSONVals[i].charPtr);
+    Store_set(ref json.roJsonUpPtrStore, idx, roJSONVals[i].upPtr);
+    Store_set(ref json.roJsonIdStore, idx, roJSONVals[i].id);
+  }
+
+  let upIndicesPost = for i in 0..length(upIndices) {
+    jsonVals[i].upPtr
+  };
+  let roUpIndicesPost : list[uint[N] $post @prover] = apply_switching_network_uint(upIndicesPost, permNw, reorderSwitches);
+  let roUpIndicesPostBits : list[list[bool[N] $post @prover]] = for i in 0..length(roUpIndicesPost)-1 {
+    let p = neq(roUpIndicesPost[i], BLOCK_SIZE as @prover) as uint[N];
+    let safeIndex = p * roUpIndicesPost[i] + BLOCK_SIZE as @prover * (1 - p);
+    dbg_print(string_append("i: ", to_string(i)));
+    dbg_print(string_append("safeIndex: ", to_string(safeIndex as $pre)));
+    bitextract(safeIndex, blockSizeBits+1)
+  };
+  for i in 1..length(roUpIndicesPostBits)-1 {
+    dbg_print(string_append("roUpIndicesPost[i]: ", to_string(roUpIndicesPost[i] as $pre)));
+    for j in 0..length(roUpIndicesPostBits[i]) {
+      dbg_print(to_string(roUpIndicesPostBits[i][j] as $pre));
+    };
+    dbg_print(string_append("roUpIndicesPost[i+1]: ", to_string(roUpIndicesPost[i+1] as $pre)));
+    for j in 0..length(roUpIndicesPostBits[i+1]) {
+      dbg_print(to_string(roUpIndicesPostBits[i+1][j] as $pre));
+    };
+    dbg_assert(le'(roUpIndicesPostBits[i], roUpIndicesPostBits[i+1], blockSizeBits+1)as $pre);
+    assert(le'(roUpIndicesPostBits[i], roUpIndicesPostBits[i+1], blockSizeBits+1) : bool[N] $post @prover);
+  };
+
+  // Ensure that every pair of nodes has the same parent
+  dbg_print("Ensuring that every pair of nodes has the same parent" : string);
+  for i in 0..length(nodeTree)/2-2 {
+    let x = nodeTree[2*i+1].up;
+    let x_bits : bitarray[$post, @prover, N] = nodeTree[2*i+1].up_bits;
+    let y = nodeTree[2*i+2].up;
+    let y_bits = nodeTree[2*i+2].up_bits;
+    //let z : bool[N] $post @prover = eq(x, y);
+    dbg_print(string_append("x: ", to_string(x as $pre)));
+    dbg_print(string_append("y: ", to_string(y as $pre)));
+    dbg_assert(x as $pre == y as $pre);
+    assert_zero(x - y);
+    // Ensure that parents appear before the children
+    let i' : uint[N] $post @public = wire{i as uint[N] * 2 + 1};
+    let i_bits = bitextract(i' as @prover, blockSizeBits + 1);
+    dbg_print(string_append("i': ", to_string(i' as $pre)));
+    //dbg_assert(x_bits as $pre < i_bits as $pre);
+    assert(lt'(x_bits, i_bits, blockSizeBits + 1));
+  };
+
+  // Ensure that the node parents are in a growing order
+  dbg_print("Ensure that node parent indices grow after every two nodes" : string);
+  for i in 1..length(nodeTree)/2-1 {
+    let x = nodeTree[2*i].up_bits;
+    let y = nodeTree[2*i+1].up_bits;
+    let z : bool[N] $post @prover = lt'(x, y, blockSizeBits + 1);
+    dbg_assert(z as $pre);
+    assert(z);
+  };
+
+  dbg_print("Converting non-terminal rules" : string);
+  dbg_print(to_string(length(parents)));
+  dbg_print("Checking whether rules were applied correctly" : string);
+  dbg_print(string_append("length(parents): ", to_string(length(parents))));
+  dbg_print(string_append("length(nodeTree): ", to_string(length(nodeTree))));
+
+  let TERMINAL_SYMBOL : uint[N] $post @prover = wire{2};
+  for i in 0..length(parents) {
+    let p = parents[i];
+    let l = nodeTree[i*2+1];
+    let r = nodeTree[i*2+2];
+    dbg_print("----- LOOP -----" : string);
+    dbg_print(string_append("i: ", to_string(i)));
+    dbg_print(string_append("p: ", ParseNode_to_string(p)));
+    dbg_print(string_append("l_idx: ", to_string(i*2+1)));
+    dbg_print(string_append("l: ", ParseNode_to_string(l)));
+    dbg_print(string_append("r_idx: ", to_string(i*2+2)));
+    dbg_print(string_append("r: ", ParseNode_to_string(r)));
+
+    // Maybe it is better to store the produced symbols in rules themselves and
+    // then check against those, rather than looking up the rule for each node
+    let parentRHS1  = Store_get(ref json.ruleRHS1Store, p.rule);
+    let parentRHS2  = Store_get(ref json.ruleRHS2Store, p.rule);
+    let leftLHS     = Store_get(ref json.ruleLHSStore, l.rule);
+    let rightLHS    = Store_get(ref json.ruleLHSStore, r.rule);
+    let consumeChar = Store_get(ref json.ruleConsumeCharStore, p.rule);
+    let consumeJSON = Store_get(ref json.ruleConsumeJSONStore, p.rule);
+    let label       = Store_get(ref json.ruleLabelStore, p.rule);
+
+    dbg_print(string_append("parentRHS1: ", to_string(parentRHS1 as $pre)));
+    dbg_print(string_append("parentRHS2: ", to_string(parentRHS2 as $pre)));
+    dbg_print(string_append("leftLHS: ", to_string(leftLHS as $pre)));
+    dbg_print(string_append("rightLHS: ", to_string(rightLHS as $pre)));
+
+    dbg_assert(parentRHS1 as $pre == leftLHS as $pre);
+    assert_zero(parentRHS1 - leftLHS);
+
+    dbg_assert(parentRHS2 as $pre == rightLHS as $pre);
+    assert_zero(parentRHS2 - rightLHS);
+
+    // Ensure that no parent is a terminal node
+    let notTerminal : bool[N] $post @prover = neq(parentRHS2, TERMINAL_SYMBOL);
+    dbg_assert(notTerminal as $pre);
+    assert(notTerminal);
+
+    // Raw pointer start and end checks
+    dbg_print("\n-- Raw check" : string);
+    dbg_print(string_append("p.rawStart: ", to_string(p.rawStart as $pre)));
+    dbg_print(string_append("p.rawEnd: ", to_string(p.rawEnd as $pre)));
+    dbg_print(string_append("l.rawStart: ", to_string(l.rawStart as $pre)));
+    dbg_print(string_append("l.rawEnd: ", to_string(l.rawEnd as $pre)));
+    dbg_print(string_append("r.rawStart: ", to_string(r.rawStart as $pre)));
+    dbg_print(string_append("r.rawEnd: ", to_string(r.rawEnd as $pre)));
+    dbg_assert(p.rawStart as $pre == l.rawStart as $pre);
+    dbg_assert(p.rawEnd as $pre == r.rawEnd as $pre);
+    dbg_assert(l.rawEnd as $pre == r.rawStart as $pre);
+    assert_zero(p.rawStart - l.rawStart);
+    assert_zero(p.rawEnd - r.rawEnd);
+
+    // Char pointer start and end checks
+    dbg_print("\n-- Chars check" : string);
+    dbg_print(string_append("p.charStart: ", to_string(p.charStart as $pre)));
+    dbg_print(string_append("p.charEnd: ", to_string(p.charEnd as $pre)));
+    dbg_print(string_append("l.charStart: ", to_string(l.charStart as $pre)));
+    dbg_print(string_append("l.charEnd: ", to_string(l.charEnd as $pre)));
+    dbg_print(string_append("r.charStart: ", to_string(r.charStart as $pre)));
+    dbg_print(string_append("r.charEnd: ", to_string(r.charEnd as $pre)));
+    let consumesChar = neq(consumeChar, -1 : uint[N] $post @public as @prover) as uint[N];
+    //dbg_assert(p.charStart + consumesChar as $pre == l.charStart as $pre);
+    assert_zero(p.charStart + consumesChar - l.charStart);
+    dbg_assert(p.charEnd as $pre == r.charEnd as $pre);
+    assert_zero(p.charEnd - r.charEnd);
+    dbg_assert(l.charEnd as $pre == r.charStart as $pre);
+    assert_zero(l.charEnd - r.charStart);
+
+    // JSON node pointer start and end checks
+    dbg_print("\n-- JSON check" : string);
+    dbg_print(string_append("p.jsonStart: ", to_string(p.jsonStart as $pre)));
+    dbg_print(string_append("p.jsonEnd: ", to_string(p.jsonEnd as $pre)));
+    dbg_print(string_append("l.jsonStart: ", to_string(l.jsonStart as $pre)));
+    dbg_print(string_append("l.jsonEnd: ", to_string(l.jsonEnd as $pre)));
+    dbg_print(string_append("r.jsonStart: ", to_string(r.jsonStart as $pre)));
+    dbg_print(string_append("r.jsonEnd: ", to_string(r.jsonEnd as $pre)));
+    let consumesJSON = neq(consumeJSON, -1 : uint[N] $post @public as @prover);
+    dbg_assert(p.jsonStart as $pre == l.jsonStart as $pre - consumesJSON as $pre as uint[N]);
+    assert_zero(p.jsonStart - (l.jsonStart - consumesJSON as uint[N]));
+    dbg_assert(l.jsonEnd as $pre == r.jsonStart as $pre);
+    assert_zero(l.jsonEnd - r.jsonStart);
+    dbg_assert(r.jsonEnd as $pre == p.jsonEnd as $pre);
+    assert_zero(r.jsonEnd - p.jsonEnd);
+
+    // Numeric value check
+    let isNumeric : bool[N] $post @prover = eq(label, 4);
+    let isString : bool[N] $post @prover = eq(label, 5);
+    let isMember : bool[N] $post @prover = eq(label, 8);
+    let isObject : bool[N] $post @prover = eq(label, 6);
+    let isArray : bool[N] $post @prover = eq(label, 7);
+
+    if (isNumeric as $pre as bool) { dbg_print("check: NUMERIC" : string); };
+    if (isString as $pre as bool) { dbg_print("check: STRING" : string); };
+    if (isMember as $pre as bool) { dbg_print("check: MEMBER" : string); };
+    if (isObject as $pre as bool) {
+      dbg_print("check: OBJECT" : string);
+      dbg_print("roUpPtrs: " : string);
+      for i in 0..length(roUpPtrs) {
+        dbg_print(to_string(roUpPtrs[i] as $pre));
+      };
+    };
+    if (isArray as $pre as bool) { dbg_print("check: ARRAY" : string); };
+    // TODO: This works as long as we only allow decimal integers, this should be changed
+    // once floating point numbers are implemented
+    let numLen = r.rawEnd - r.rawStart;
+    //let json = index_JSONNode(jsonVals, p.jsonStart);
+    let numValue = Store_get(ref jsonNumValueStore, p.jsonStart);
+    let charPtr = Store_get(ref jsonCharPtrStore, p.jsonStart);
+    let childValsMatch = p.numValue - (l.numValue * pow(10, numLen, blockSizeBits) + r.numValue);
+    //let memberLenMatches = eq() & eq(l.charEnd, json.charPtr + json.numValue);
+    //let strLenMatches = () & eq();
+    let mut childrenStartPre : uint[N] $pre @prover = -1;
+    for i in 0..length(roUpPtrs){
+      let i = length(roUpPtrs) - i - 1;
+      childrenStartPre = if roUpPtrs[i] as $pre as uint as @prover == p.jsonStart as $pre as uint as @prover { i as uint[N] as @prover } else { childrenStartPre };
+//      if roUpPtrs[i] as $pre as uint as @prover == p.jsonStart as $pre as uint as @prover {
+//        childrenStartPre = i as uint[N] as @prover;
+//      }
+    };
+    let childrenStart = wire{childrenStartPre};
+    let childrenStartAfterEl = Store_get(ref roJsonUpPtrStore, childrenStart);
+    let childrenStartBeforeEl = Store_get(ref roJsonUpPtrStore, childrenStart-1);
+
+    let isObjectOrArray = isObject | isArray;
+    let cutoffIdx : uint[N] $post @prover = (childrenStart + numValue) * isObjectOrArray as uint[N];
+    dbg_print(string_append("childrenStart: ", to_string(childrenStartPre)));
+    dbg_print(string_append("json.numValue: ", to_string(numValue as $pre)));
+    dbg_print(string_append("cutoffIdx: ", to_string(cutoffIdx as $pre)));
+    let elemBeforeCutoff = Store_get(ref roJsonUpPtrStore, cutoffIdx - 1 : uint[N] $post @prover);
+    let elemAfterCutoff = Store_get(ref roJsonUpPtrStore, cutoffIdx);
+    //if (isObjectOrArray as $pre as bool) {
+    //  dbg_print(string_append("elemBeforeCutoff: ", to_string(elemBeforeCutoff as $pre)));
+    //  dbg_print(string_append("elemAfterCutoff: ", to_string(elemAfterCutoff as $pre)));
+    //  dbg_print(string_append("json.numValue: ", to_string(numValue as $pre)));
+    //  dbg_print(string_append("p.jsonStart: ", to_string(p.jsonStart as $pre)));
+    //  dbg_print("roJsonUpPtrStore:" : string);
+    //  for i in 0..length(jsonVals) {
+    //    dbg_print(to_string(Store_get(ref roJsonUpPtrStore, wire{i as uint[N] as @prover}) as $pre));
+    //  };
+    //};
+    //let elementsMatch = impli(, ) & neq(p.jsonStart, elemAfterCutoff);
+    //dbg_print(string_append("numLen: ", to_string(numLen as $pre)));
+    //dbg_print(string_append("lhs: ", to_string(p.numValue as $pre)));
+    //dbg_print(string_append("rhs: ", to_string((l.numValue * pow(10, numLen, blockSizeBits) + r.numValue) as $pre)));
+    //dbg_print(string_append("pow: ", to_string(pow(10, numLen, blockSizeBits) as $pre)));
+    //dbg_print(string_append("json: ", JSONNode_to_string(json)));
+    dbg_assert(impli(isNumeric as $pre, is_zero(childValsMatch) as $pre));
+    conditional_assert_zero(isNumeric, childValsMatch);
+    dbg_assert(impli(isString as $pre, is_zero(p.charStart - charPtr) as $pre));
+    conditional_assert_zero(isString, p.charStart - charPtr);
+    dbg_assert(impli(isString as $pre, is_zero(charPtr + numValue - p.charEnd) as $pre));
+    conditional_assert_zero(isString, charPtr + numValue - p.charEnd);
+    dbg_assert(impli(isMember as $pre, is_zero(l.charStart - charPtr) as $pre));
+    conditional_assert_zero(isMember, l.charStart - charPtr);
+    dbg_assert(impli(isMember as $pre, is_zero(charPtr + numValue - l.charEnd) as $pre));
+    conditional_assert_zero(isMember, charPtr + numValue - l.charEnd);
+    dbg_assert(impli(isObjectOrArray as $pre, is_zero(numValue * (p.jsonStart - elemBeforeCutoff)) as $pre));
+    conditional_assert_zero(isObjectOrArray, numValue * (p.jsonStart - elemBeforeCutoff));
+    dbg_assert(impli(isObjectOrArray as $pre, is_zero(numValue * (p.jsonStart - childrenStartAfterEl)) as $pre));
+    conditional_assert_zero(isObjectOrArray, numValue * (p.jsonStart - childrenStartAfterEl));
+    assert(impli(isObjectOrArray, neq(p.jsonStart, elemAfterCutoff) & neq(p.jsonStart, childrenStartBeforeEl)));
+  };
+
+  let mut rawCount = 0;
+  let mut charCount = 0;
+  let mut jsonCount = 0;
+  // Do checks per parse node
+  for i in 0..length(nodeTree) {
+    let node = nodeTree[i];
+    dbg_print(string_append("node: ", ParseNode_to_string(node)));
+    //let rule = index_Rule(rules, node.rule as uint[N] as @prover);
+    //dbg_print(string_append("rule: ", Rule_to_string(rule)));
+    let rhs1        = Store_get(ref json.ruleRHS1Store, node.rule);
+    let rhs2        = Store_get(ref json.ruleRHS2Store, node.rule);
+    let consumeChar = Store_get(ref json.ruleConsumeCharStore, node.rule);
+    let consumeJSON = Store_get(ref json.ruleConsumeJSONStore, node.rule);
+    let label       = Store_get(ref json.ruleLabelStore, node.rule);
+
+    // Raw check
+    let isTerminal = eq(rhs2, 2);
+    rawCount = rawCount + isTerminal as uint[N];
+    let rawCharMatch = Store_get(ref json.rawStore, node.rawStart) - rhs1;
+    let rawHasChar  = node.rawStart + 1 - node.rawEnd;
+    //dbg_assert((impli(isTerminal, rawCharMatch & rawHasChar)) as $pre);
+    conditional_assert_zero(isTerminal, rawCharMatch);
+    conditional_assert_zero(isTerminal, rawHasChar);
+
+    // Char check
+    let consumesChar = neq(consumeChar, -1 : uint[N] $post @public as @prover);
+    charCount = charCount + consumesChar as uint[N];
+    let charsChar = Store_get(ref json.charsStore, node.charStart);
+    let charCharMatch = charsChar - consumeChar;
+    let charHasChar  = node.charStart + 1 - node.charEnd;
+    if (consumesChar as $pre as bool) {
+      dbg_print(string_append("character in chars: ", to_string(charsChar as $pre)));
+      dbg_print(string_append("character in rule:  ", to_string(consumeChar as $pre)));
+    };
+    //dbg_assert((impli(consumesChar, charCharMatch & charHasChar)) as $pre);
+    conditional_assert_zero(consumesChar, charCharMatch);
+    conditional_assert_zero(consumesChar, charHasChar);
+
+    // JSON check
+    let consumesJSON = neq(consumeJSON, -1 : uint[N] $post @public as @prover);
+    jsonCount = jsonCount + consumesJSON as uint[N];
+    let hasExactJSON = node.jsonEnd - node.jsonStart - consumesJSON as uint[N];
+    //dbg_assert((impli(isTerminal, hasExactJSON)) as $pre);
+    conditional_assert_zero(isTerminal, hasExactJSON);
+    let jsonIndex = node.jsonStart;
+    let jsonType = Store_get(ref jsonTypeStore, jsonIndex);
+    let numValue = Store_get(ref jsonNumValueStore, jsonIndex);
+
+    if (consumesJSON as $pre as bool) {
+      dbg_print(string_append("consumeJSON: ", to_string(consumeJSON as $pre)));
+      dbg_print(string_append("jsonIndex: ", to_string(jsonIndex as $pre)));
+      //dbg_print(string_append("jNode: ", JSONNode_to_string(jNode)));
+    };
+    let jsonTypesMatch = jsonType - consumeJSON;
+    //dbg_assert((impli(consumesJSON, jsonTypesMatch)) as $pre);
+    conditional_assert_zero(consumesJSON, jsonTypesMatch);
+
+    // Rule-specific checks
+    let isNumeric : bool[N] $post @prover = eq(label, 4);
+    let jsonValsMatch = numValue - node.numValue;
+    //dbg_assert((impli(consumesJSON & isNumeric, jsonValsMatch)) as $pre);
+    conditional_assert_zero(consumesJSON & isNumeric, jsonValsMatch);
+  }
+  dbg_print("\nEnsure that raw, char and JSON node counts match with the root parse node segment lengths" : string);
+  dbg_print(string_append("rawCount: ", to_string(rawCount as $pre)));
+  dbg_print(string_append("charCount: ", to_string(charCount as $pre)));
+  dbg_print(string_append("jsonCount: ", to_string(jsonCount as $pre)));
+
+  // Check the up pointers of JSON nodes
+  dbg_assert(jsonVals[0].id as $pre == 0);
+  assert_zero(jsonVals[0].id);
+  let rules_pre : list[list[uint $pre @public]] = rules_post_pre.1;
+  let rules_pre_prover : list[list[uint $pre @prover] $pre @prover] $pre @prover = for i in 0 .. (length(rules_pre) as @prover) { for j in 0 .. (length((rules_pre as @prover)[i as @prover]) as @prover) { ((rules_pre as @prover)[i as @prover] as @prover)[j as @prover] as @prover } };
+  for j in 0..length(jsonVals)-1 {
+    let i = j + 1;
+    let i' : uint[N] $post @public = wire { i as uint[N]};
+    let i_bits = bitextract(i' as @prover, blockSizeBits);
+    let node = jsonVals[i];
+    dbg_print(string_append("json:", JSONNode_to_string(node)));
+    let isDummy = eq(node.jsonType, -1);
+    //dbg_print(string_append("parent:", JSONNode_to_string(parent)));
+    let parentJSONType : uint $pre @prover = if node.upPtr as $pre as uint == input.config.block_size as @prover {
+      -1
+    } else {
+      (jsonVals as @prover)[node.upPtr as $pre as uint].jsonType as $pre as uint
+    };
+
+    let mut parentPTNodeIdx : uint[N] $pre @prover = 0;
+    for i in 0..length(nodeTree){
+      let n : ParseNode[N] = nodeTree[i];
+      let indexer : uint $pre @prover = n.rule as $pre as uint;
+      let rule : list[uint $pre @prover] $pre @prover = (rules_pre_prover)[indexer];
+      parentPTNodeIdx = if /* rule.consumeJSON */ rule[4 : uint $pre @prover] == parentJSONType &
+        n.jsonStart as $pre as uint == node.upPtr as $pre as uint { i as uint[N] as @prover } else { parentPTNodeIdx };
+//        parentPTNodeIdx = i as @prover as uint[N];
+        //dbg_print(string_append("rule:", Rule_to_string(rule)));
+//      }
+    };
+    //dbg_print(string_append("parentPT:", ParseNode_to_string(parentPTNode)));
+    let parentPTNodeIdxPost = wire{parentPTNodeIdx};
+    let jsonStart = Store_get(ref json.nodeTreeJSONStartStore, parentPTNodeIdxPost);
+    //let jsonStartBits = for i in 0..blockSizeBits-1 {
+    //  let idx : uint[N] $post @prover = (wire{i as uint[N]}) as @prover;
+    //  Store_get(ref nodeTreeJSONStartBitsStore, (blockSizeBitsPost as @prover-1)*parentPTNodeIdxPost as @prover+idx)
+    //};
+    let jsonStartBits = bitextract(jsonStart, blockSizeBits);
+    let jsonEnd = Store_get(ref json.nodeTreeJSONEndStore, parentPTNodeIdxPost);
+    //let jsonEndBits : bitarray[$post, @prover, N] = for i in 0..blockSizeBits-1 {
+    //  let idx : uint[N] $post @prover = (wire{i as uint[N]}) as @prover;
+    //  Store_get(ref nodeTreeJSONEndBitsStore, (blockSizeBitsPost as @prover-1)*parentPTNodeIdxPost as @prover+idx)
+    //};
+    let jsonEndBits = bitextract(jsonEnd, blockSizeBits);
+    let isParentPTNode = jsonStart - node.upPtr as @prover;
+    dbg_print(string_append("isParentPTNode:", to_string(isParentPTNode as $pre)));
+    dbg_print(string_append("i':", to_string(i' as $pre)));
+    dbg_print(string_append("jsonStart:", to_string(jsonStart as $pre)));
+    dbg_print(string_append("jsonEnd:", to_string(jsonEnd as $pre)));
+    //dbg_print("jsonStartBits:" : string);
+    //for j in 0..length(jsonStartBits){
+    //  dbg_print(to_string(jsonStartBits[j] as $pre));
+    //}
+    //dbg_print("jsonEndBits:" : string);
+    //for j in 0..length(jsonEndBits){
+    //  dbg_print(to_string(jsonEndBits[j] as $pre));
+    //}
+    dbg_print(string_append("lowerBound:", to_string(lt'(jsonStartBits, i_bits, blockSizeBits) as $pre)));
+    dbg_print(string_append("upperBound:", to_string(le'(i_bits, jsonEndBits, blockSizeBits) as $pre)));
+    let containsChild = lt'(jsonStartBits, i_bits, blockSizeBits) & le'(i_bits, jsonEndBits, blockSizeBits);
+    dbg_print(string_append("containsChild:", to_string(containsChild as $pre)));
+    //dbg_assert((impli(!isDummy, isParentPTNode == 0)) as $pre);
+    conditional_assert_zero(!isDummy, isParentPTNode);
+    dbg_assert((impli(!isDummy, containsChild)) as $pre);
+    assert(impli(!isDummy, containsChild));
+
+    // Check the IDs of jsonVals
+    dbg_print(string_append("jsonVals[i-1].id: ", to_string(jsonVals[i-1].id as $pre)));
+    dbg_print(string_append("jsonVals[i].id: ", to_string(jsonVals[i].id as $pre)));
+    dbg_assert(jsonVals[i-1].id as $pre + 1 == jsonVals[i].id as $pre);
+    assert_zero(jsonVals[i-1].id + 1 - jsonVals[i].id);
+  };
+
+  dbg_print(string_append("rawCount: ", to_string(rawCount as $pre)));
+  dbg_assert(rawCount as $pre == nodeTree[0].rawEnd as $pre);
+  assert_zero(rawCount - nodeTree[0].rawEnd);
+  dbg_assert(charCount as $pre == nodeTree[0].charEnd as $pre);
+  assert_zero(charCount - nodeTree[0].charEnd);
+  dbg_assert(jsonCount as $pre == nodeTree[0].jsonEnd as $pre);
+  assert_zero(jsonCount - nodeTree[0].jsonEnd);
+
+  //for i in 0..length(roJSONVals) {
+  //  dbg_print(string_append("i: ", to_string(i)));
+  //  dbg_print(string_append("jNode: ", JSONNode_to_string(roJSONVals[i])));
+  //};
+  json.nodes = roJSONVals;
+  dbg_print("All done!" : string);
+}
+
+fn loadRules[N : Nat]() -> tuple[list[Rule[N]] $pre @public, list[list[uint $pre @public]] ]  {
+  dbg_print("Converting rules" : string);
+  let ruleCount : uint $pre @public = get_public("ruleCount");
+  dbg_print(string_append("ruleCount: ", to_string(ruleCount : uint $pre @public)));
+  let rules : list[list[uint $pre @public]] = get_public("rules");
+  ( for i in 0..ruleCount {
+    let x = rules[i];
+    Rule {
+      lhs :        wire{x[0] as @prover as uint[N]},
+      rhs1 :       wire{x[1] as @prover as uint[N]},
+      rhs2 :       wire{x[2] as @prover as uint[N]},
+      consumeChar: wire{x[3] as @prover as uint[N]},
+      consumeJSON: wire{x[4] as @prover as uint[N]},
+      label:       wire{x[5] as @prover as uint[N]},
+    }
+  }, rules)
+}
+
+pub fn decodeWitness[N : Nat]() -> JsonWitness[N] $pre @public {
+  let blockSize : uint $pre @public = get_public("blockSize");
+  let blockSizeBits : uint $pre @public = field_bit_width(blockSize);
+  let keyMaxLen : uint $pre @public = get_public("keyMaxLen");
+  let ruleCount : uint $pre @public = get_public("ruleCount");
+  // Input string
+  let raw_pre : list[uint[N] $pre @prover] $pre @prover = get_witness("raw");
+  let raw = for i in 0..blockSize {
+    wire{ raw_pre[i as @prover] }
+  };
+  dbg_print("Copying chars from witness" : string);
+  let witChars : list[uint[N] $pre @prover] $pre @prover = get_witness("chars");
+  let chars : list[uint[N] $post @prover] $pre @public =
+    for i in 0..blockSize-2 {
+      wire{witChars[i as @prover]}
+    };
+  dbg_print("Generating a string from chars" : string);
+  let str : String[$post, @prover, N] =
+    String {
+      chars: chars,
+      len: wire{blockSize as uint[N] as @prover}
+    };
+
+  // Parse tree nodes
+  let parseNodeCount = blockSize*2-1;
+  let jsonNodeCount = blockSize/2+1;
+  dbg_print("Copying tree nodes" : string);
+  dbg_print(string_append("PARSE_NODE_COUNT: ", to_string(parseNodeCount)));
+  let parseTree : list[list[uint[N] $pre @prover] $pre @prover] $pre @prover = get_witness("parseTree");
+  let parseNodes : list[ParseNode[N] $pre @public] $pre @public = for i in 0..parseNodeCount {
+    let node : list[uint[N] $pre @prover] $pre @prover = parseTree[i as @prover];
+    let rule : uint[N] $post @prover = wire{node[0]};
+    let up : uint[N] $pre @prover = node[1];
+    let rawStart : uint[N] $post @prover = wire{node[2]};
+    let rawEnd : uint[N] $post @prover = wire{node[3]};
+    let jsonStart : uint[N] $post @prover = wire{node[4]};
+    let jsonEnd : uint[N] $post @prover = wire{node[5]};
+    let charStart : uint[N] $post @prover = wire{node[6]};
+    let charEnd : uint[N] $post @prover = wire{node[7]};
+    let numValue : uint[N] $post @prover = wire{node[8]};
+    let up' = wire { if (up == -1) as bool {
+      blockSize as uint[N] as @prover
+    } else {
+      up
+    }};
+    dbg_print(string_append("up: ", to_string(up)));
+    dbg_print(string_append("up': ", to_string(up' as $pre)));
+    ParseNode {
+      rawStart:       rawStart as uint[N],
+      rawEnd:         rawEnd as uint[N],
+      charStart:      charStart as uint[N],
+      charEnd:        charEnd as uint[N],
+      jsonStart:      jsonStart as uint[N],
+      jsonStart_bits: bitextract(jsonStart, blockSizeBits-1),
+      jsonEnd:        jsonEnd as uint[N],
+      jsonEnd_bits:   bitextract(jsonEnd, blockSizeBits-1),
+      rule:           rule as uint[N],
+      numValue:       numValue as uint[N],
+      up:             up' as uint[N],
+      up_bits:        bitextract(up', blockSizeBits+1),
+    }
+  };
+
+  // JSON tree nodes
+  dbg_print("Copying JSON tree nodes" : string);
+  let jsonNodes : list[JSONNode[N] $pre @public] $pre @public = for i in 0..jsonNodeCount {
+    let nodes : list[list[uint[N] $pre @prover] $pre @prover] $pre @prover = get_witness("jsonTree");
+    let node : list[uint[N] $pre @prover] $pre @prover = nodes[i as @prover];
+    JSONNode {
+      jsonType: wire{node[0]},
+      numValue: wire{node[1]},
+      charPtr:  wire{node[2]},
+      upPtr:    wire{
+        let up = node[3];
+        if (up == -1) as bool {
+          blockSize as uint[N] as @prover
+        } else {
+          up
+        }
+      },
+      id:       wire{node[4]},
+    }
+  };
+
+  dbg_print("Creating a JSON witness struct" : string);
+  JsonWitness {
+    chars: str,
+    raw: raw,
+    parse_nodes: parseNodes,
+    json_nodes: jsonNodes,
+    config: Config {
+      block_size: blockSize,
+      key_max_length: keyMaxLen,
+      rule_count: ruleCount,
+    }
+  }
+}

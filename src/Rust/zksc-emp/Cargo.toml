@@ -1,0 +1,17 @@
+[package]
+name = "zksc-emp"
+version = "0.3.0"
+edition = "2021"
+
+[dependencies]
+zksc-app-lib = { path = "../zksc-app-lib/" }
+log = "0.4"
+simple_logger = "2.3"
+num-traits = "0.2"
+
+[build-dependencies]
+bindgen = "0.60"
+
+[features]
+default = []
+zksc_debug = ["zksc-app-lib/zksc_debug"]

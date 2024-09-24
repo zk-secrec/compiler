@@ -1,0 +1,543 @@
+use Std::*;
+use Integer::*;
+use Bitextract::*;
+use Inequalities::*;
+
+// Length should be less than half of log2(N)
+// Post-point length should be at least two less than the length
+// Sizeasserter lists should be created with sizeasserters_new(bw) with bw greater than length
+
+// coef should fit into len bits after unsigning, i.e. 0<=coef<2^(len-1) or N-2^(len-1)<=coef<N
+pub struct Fixed[N : Nat, $S, @D] 
+{ coef : uint[N] $S @D
+, len : u64 $pre @public
+, pplen : u64 $pre @public
+}
+
+pub fn fixed_pre[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+) -> Fixed[N, $pre, @D] 
+{ Fixed 
+  { coef: x.coef as $pre
+  , len: x.len
+  , pplen: x.pplen
+  }
+}
+
+pub fn fixed_downcast[N : Nat, $S, @D]
+( x : Fixed[N, $pre, @D]
+) -> Fixed[N, $S, @D]
+where Field[N] 
+{ Fixed
+  { coef: uint_downcast(x.coef)
+  , len: x.len
+  , pplen: x.pplen
+  }
+}
+
+pub fn fixed_prover[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+) -> Fixed[N, $S, @prover]
+{ Fixed 
+  { coef: x.coef as @prover
+  , len: x.len
+  , pplen: x.pplen
+  }
+}
+
+pub fn fixed_to_bitstring[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+) -> string $pre @D
+where Field[N] 
+{ let f = fixed_pre(x)
+; let coef = if (f.coef as uint < N / 2) { f.coef } else { f.coef + pow_pre(2, f.len) }
+; let coef_bits = bitextract_pre(coef, f.len)
+; let rec ss : list[string $pre @D] = for i in 0 .. f.len + 1
+  { if (i == 0) { "" }
+    else if (i == f.pplen + 1) { "." ++ ss[f.pplen] }
+    else
+    { let k = if (i <= f.pplen) { i - 1 } else { i - 2 }
+    ; let b : string $pre @D = if (coef_bits[k]) { "1" } else { "0" }
+    ; b ++ ss[i - 1]
+    }
+  }
+; ss[f.len]
+}
+
+// Assumes that 0<=coef<2^(len-1)
+fn fractional_string[N : Nat, @D]
+( coef : uint[N] $pre @D
+, ppmax : uint[N] $pre @D
+, nonempty : bool[N] $pre @D
+) -> string $pre @D 
+{ if (coef == 0) { if (nonempty) { "" } else { "0" } } 
+  else 
+  { let fractional_part = coef * 10
+  ; let whole = fractional_part / ppmax
+  ; let remaining = fractional_part - whole * ppmax
+  ; to_string(whole) ++ fractional_string(remaining, ppmax, true)
+  }
+}
+
+pub fn fixed_to_string[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+) -> string $pre @D
+where Field[N] 
+{ let f = fixed_pre(x)
+; let ppmax = pow_pre(2, f.pplen)
+; let sign = f.coef as uint >= N / 2
+; let s_sign = if (sign) { "-" } else { "" }
+; let coef_abs = if (sign) { -f.coef } else { f.coef }
+; let wholes = coef_abs / ppmax
+; let s : string $pre @D = s_sign ++ (to_string(wholes) ++ ".")
+; s ++ fractional_string(coef_abs - wholes * ppmax, ppmax, false)
+}
+
+pub fn fixed3[N : Nat, $S, @D]
+( coef : uint[N] $S @D
+, len : u64 $pre @public
+, pplen : u64 $pre @public
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> Fixed[N, $S, @D]
+where Field[N]
+{ let half_len : uint[N] $S @public = uint_downcast(pow_pre(2, len - 1))
+; let trash = check_size(coef + half_len as @D, ref sizeasserters[len])
+; Fixed 
+  { coef: coef
+  , len: len
+  , pplen: pplen
+  }
+}
+
+pub fn fixed[N : Nat, @D]
+( coef : uint[N] $pre @D
+, len : u64 $pre @public
+, pplen : u64 $pre @public
+) -> Fixed[N, $pre, @D]
+where Field[N] 
+{ let mut sizeasserters = sizeasserters_new(log2(N) as u64 - 2)
+; fixed3(coef, len, pplen, ref sizeasserters)
+}
+
+// Checks that the number is non-negative
+pub fn fixed_nonnegative3[N : Nat, $S, @D]
+( coef : uint[N] $S @D
+, len : u64 $pre @public
+, pplen : u64 $pre @public
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> Fixed[N, $S, @D]
+where Field[N]
+{ let trash = check_size(coef, ref sizeasserters[len - 1])
+; Fixed 
+  { coef: coef
+  , len: len
+  , pplen: pplen
+  }
+}
+
+pub fn fixed_nonnegative[N : Nat, @D]
+( coef : uint[N] $pre @D
+, len : u64 $pre @public
+, pplen : u64 $pre @public
+) -> Fixed[N, $pre, @D]
+where Field[N]
+{ let mut sizeasserters = sizeasserters_new(log2(N) as u64 - 2)
+; fixed_nonnegative3(coef, len, pplen, ref sizeasserters)
+}
+
+pub fn uint_to_fixed3[N : Nat, $S, @D]
+( n : uint[N] $S @D
+, len : u64 $pre @public
+, pplen : u64 $pre @public
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> Fixed[N, $S, @D]
+where Field[N]
+{ let coef = n * pow_pre(2, pplen)
+; fixed3(coef, len, pplen, ref sizeasserters)
+}
+
+pub fn uint_to_fixed[N : Nat, @D]
+( n : uint[N] $pre @D
+, len : u64 $pre @public
+, pplen : u64 $pre @public
+) -> Fixed[N, $pre, @D]
+where Field[N] 
+{ let mut sizeasserters = sizeasserters_new(log2(N) as u64 - 2)
+; uint_to_fixed3(n, len, pplen, ref sizeasserters)
+}
+
+pub fn negate_fixed[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+) -> Fixed[N, $S, @D]
+where Field[N] 
+{ let halfmax : uint[N] $S @public = uint_downcast(pow_pre(2, x.len - 1))
+; univ_assert(!is_zero(x.coef + halfmax as @D))
+; Fixed 
+  { coef: -x.coef
+  , len: x.len
+  , pplen : x.pplen
+  }
+}
+
+pub fn add_fixed3[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+, y : Fixed[N, $S, @D]
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> Fixed[N, $S, @D]
+where Field[N] 
+{ dbg_assert(x.len == y.len & x.pplen == y.pplen)
+; let new_len = x.len
+; let new_pplen = x.pplen
+; let new_coef = x.coef + y.coef
+; fixed3(new_coef, new_len, new_pplen, ref sizeasserters)
+}
+
+pub fn add_fixed[N : Nat, @D]
+( x : Fixed[N, $pre, @D]
+, y : Fixed[N, $pre, @D]
+) -> Fixed[N, $pre, @D]
+where Field[N] 
+{ let mut sizeasserters = sizeasserters_new(log2(N) as u64 - 2)
+; add_fixed3(x, y, ref sizeasserters)
+}
+
+pub fn sub_fixed3[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+, y : Fixed[N, $S, @D]
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> Fixed[N, $S, @D]
+where Field[N] 
+{ add_fixed3(x, negate_fixed(y), ref sizeasserters)
+}
+
+pub fn sub_fixed[N : Nat, @D]
+( x : Fixed[N, $pre, @D]
+, y : Fixed[N, $pre, @D]
+) -> Fixed[N, $pre, @D]
+where Field[N] 
+{ add_fixed(x, negate_fixed(y))
+}
+
+fn coef_mult_unchecked[N : Nat, @D]
+( x : uint[N] $pre @D
+, y : uint[N] $pre @D
+, pplen : u64 $pre @public
+) -> uint[N] $pre @D 
+where Field[N]
+{ let ppmax = pow_pre(2, pplen)
+; div_signed(x * y, ppmax)
+}
+
+fn check_coef_mult3[N : Nat]
+( x : uint[N] $post @prover
+, y : uint[N] $post @prover
+, z : uint[N] $post @prover
+, pplen : u64 $pre @public
+, ref sizeasserters : list[SizeAsserter[N, $post, @prover]]
+) 
+where Field[N] 
+{ let ppmax : uint[N] $post @public = wire { pow_pre(2, pplen) }
+; let trash = check_size(x * y - z * ppmax as @prover, ref sizeasserters[pplen])
+; 
+}
+
+fn coef_mult3[N : Nat, $S, @D]
+( x : uint[N] $S @D
+, y : uint[N] $S @D
+, pplen : u64 $pre @public
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> uint[N] $S @D
+where Field[N]
+{ let res = uint_downcast(coef_mult_unchecked(x as $pre, y as $pre, pplen))
+; if (post $S)
+  { if (@prover <= @D) { check_coef_mult3(x, y, res, pplen, ref sizeasserters) }
+  }
+; res
+}
+
+pub fn mult_fixed3[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+, y : Fixed[N, $S, @D]
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> Fixed[N, $S, @D]
+where Field[N]
+{ dbg_assert(x.len == y.len & x.pplen == y.pplen)
+; let new_len = x.len
+; let new_pplen = x.pplen
+; let new_coef = coef_mult3(x.coef, y.coef, new_pplen, ref sizeasserters)
+; fixed3(new_coef, new_len, new_pplen, ref sizeasserters)
+}
+
+pub fn mult_fixed[N : Nat, @D]
+( x : Fixed[N, $pre, @D]
+, y : Fixed[N, $pre, @D]
+) -> Fixed[N, $pre, @D]
+where Field[N]
+{ let mut sizeasserters = sizeasserters_new(log2(N) as u64 - 2)
+; mult_fixed3(x, y, ref sizeasserters)
+}
+
+fn coef_div_unchecked[N : Nat, @D]
+( x : uint[N] $pre @D
+, y : uint[N] $pre @D
+, pplen : u64 $pre @public
+) -> uint[N] $pre @D 
+where Field[N]
+{ let ppmax = pow_pre(2, pplen)
+;
+  // it's important to first multiply then divide, or else you lose precision
+  div_signed(x * ppmax, y)
+}
+
+fn check_coef_div3[N : Nat]
+( x : uint[N] $post @prover
+, y : uint[N] $post @prover
+, z : uint[N] $post @prover
+, len : u64 $pre @public
+, pplen : u64 $pre @public
+, ref sizeasserters : list[SizeAsserter[N, $post, @prover]]
+) 
+where Field[N] 
+{ let ppmax : uint[N] $post @public = wire { pow_pre(2, pplen) }
+; let sign = wire { if (y as $pre as uint >= N / 2) { -1 } else { 1 } }
+; assert_zero(sign * sign - 1)
+; let t = (x * ppmax as @prover - y * z) * sign
+; let y_abs = y * sign
+; let checked_t = check_size(t, ref sizeasserters[len])
+; let checked_y = check_size(y_abs, ref sizeasserters[len - 1])
+; assert_lt'(checked_t, checked_y, ref sizeasserters[len])
+}
+
+fn coef_div3[N : Nat, $S, @D]
+( x : uint[N] $S @D
+, y : uint[N] $S @D
+, len : u64 $pre @public
+, pplen : u64 $pre @public
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> uint[N] $S @D 
+where Field [N]
+{ let res = uint_downcast(coef_div_unchecked(x as $pre, y as $pre, pplen))
+; if (post $S) 
+  { if (@prover <= @D) { check_coef_div3(x, y, res, len, pplen, ref sizeasserters) }
+  }
+; res
+}
+
+pub fn div_fixed3[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+, y : Fixed[N, $S, @D]
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> Fixed[N, $S, @D]
+where Field[N] 
+{ dbg_assert(x.len == y.len & x.pplen == y.pplen)
+; let new_len = x.len
+; let new_pplen = x.pplen
+; let new_coef = coef_div3(x.coef, y.coef, new_len, new_pplen, ref sizeasserters)
+; fixed3(new_coef, new_len, new_pplen, ref sizeasserters)
+}
+
+pub fn div_fixed[N : Nat, @D]
+( x : Fixed[N, $pre, @D]
+, y : Fixed[N, $pre, @D]
+) -> Fixed[N, $pre, @D]
+where Field[N]
+{ let mut sizeasserters = sizeasserters_new(log2(N) as u64 - 2)
+; div_fixed3(x, y, ref sizeasserters)
+}
+
+pub fn lt_fixed3[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+, y : Fixed[N, $S, @D]
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> bool[N] $S @D 
+where Field[N] 
+{ dbg_assert(x.len == y.len & x.pplen == y.pplen)
+; let common_len = x.len
+; let half_max : uint[N] $S @public = uint_downcast(pow_pre(2, common_len - 1))
+; let x_shifted = x.coef + half_max as @D
+; let y_shifted = y.coef + half_max as @D
+; if (post $S)
+  { if (@prover <= @D) 
+    { lt3'(Checked { val: x_shifted }, Checked { val: y_shifted }, ref sizeasserters[common_len])
+    } else { wire { x_shifted as $pre < y_shifted as $pre } }
+  } else { x_shifted < y_shifted }
+}
+
+pub fn lt_fixed[N : Nat, @D]
+( x : Fixed[N, $pre, @D]
+, y : Fixed[N, $pre, @D]
+) -> bool[N] $pre @D
+where Field[N]
+{ let mut sizeasserters = sizeasserters_new(log2(N) as u64 - 2)
+; lt_fixed3(x, y, ref sizeasserters)
+}
+
+pub fn gt_fixed3[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+, y : Fixed[N, $S, @D]
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> bool[N] $S @D 
+where Field[N] 
+{ lt_fixed3(y, x, ref sizeasserters)
+}
+
+pub fn gt_fixed[N : Nat, @D]
+( x : Fixed[N, $pre, @D]
+, y : Fixed[N, $pre, @D]
+) -> bool[N] $pre @D 
+where Field[N] 
+{ lt_fixed(y, x)
+}
+
+pub fn le_fixed3[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+, y : Fixed[N, $S, @D]
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> bool[N] $S @D 
+where Field[N] 
+{ !lt_fixed3(y, x, ref sizeasserters)
+}
+
+pub fn le_fixed[N : Nat, @D]
+( x : Fixed[N, $pre, @D]
+, y : Fixed[N, $pre, @D]
+) -> bool[N] $pre @D 
+where Field[N] 
+{ !lt_fixed(y, x)
+}
+
+pub fn ge_fixed3[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+, y : Fixed[N, $S, @D]
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> bool[N] $S @D 
+where Field[N] 
+{ !lt_fixed3(x, y, ref sizeasserters)
+}
+
+pub fn ge_fixed[N : Nat, @D]
+( x : Fixed[N, $pre, @D]
+, y : Fixed[N, $pre, @D]
+) -> bool[N] $pre @D 
+where Field[N] 
+{ !lt_fixed(x, y)
+}
+
+pub fn eq_fixed[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+, y : Fixed[N, $S, @D]
+) -> bool[N] $S @D 
+where Field[N] 
+{ dbg_assert(x.len == y.len & x.pplen == y.pplen)
+; eq(x.coef, y.coef)
+}
+
+pub fn neq_fixed[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+, y : Fixed[N, $S, @D]
+) -> bool[N] $S @D 
+where Field[N] 
+{ !eq_fixed(x, y)
+}
+
+pub fn fixed_cond[M : Nat, N : Nat, $S, @D]
+( b : bool[M] $S @D
+, x : Fixed[N, $S, @D]
+, y : Fixed[N, $S, @D]
+) -> Fixed[N, $S, @D]
+where Field[N], Convertible[M, N]
+{ dbg_assert(x.len == y.len)
+; dbg_assert(x.pplen == y.pplen)
+; Fixed 
+  { coef : uint_cond(b, x.coef, y.coef)
+  , len : x.len
+  , pplen : x.pplen
+  }
+} 
+
+fn coef_sqrt_helper[@D]
+( init : uint $pre @D
+, current : uint $pre @D
+, ppmax : uint $pre @D
+) -> uint $pre @D
+{ //(x^2+u*2^k)/(2x)
+  let next = (current * current + init * ppmax) / (2 * current)
+; if (current <= next) { current } 
+  else { coef_sqrt_helper(init, next, ppmax) } 
+}
+
+fn coef_sqrt_unchecked[N : Nat, @D]
+( x : uint[N] $pre @D
+, ppmax : uint[N] $pre @public
+) -> uint[N] $pre @D
+where Field[N] 
+{ if (x == 0) { x } 
+  else 
+  { let current = max_pre(x, ppmax as @D)
+  ; let res = coef_sqrt_helper(x as uint, current as uint, ppmax as @D as uint)
+/*
+  ; dbg_print("original fixed " ++ (to_string(x as $pre) ++ (" / " ++ to_string(ppmax as @D))))
+  ; dbg_print("result fixed " ++ (to_string(res as $pre) ++ (" / " ++ to_string(ppmax as @D))))
+*/
+  ; res as uint[N]
+  }
+}
+
+// Assumes that len > pplen + 1 (i.e., at least 2 binary digits in integral part)
+// Assumes that both x and z are normal non-negative fixed point numbers
+fn check_coef_sqrt3[N : Nat]
+( x : uint[N] $post @prover
+, z : uint[N] $post @prover
+, len : u64 $pre @public
+, ppmax : uint[N] $pre @public
+, ref sizeasserters : list[SizeAsserter[N, $post, @prover]]
+) 
+where Field[N] 
+{
+  // inequality checks use the same principle as in check_coef_div3
+
+  let mid = x * (wire { ppmax }) as @prover - z * z
+; let right = z + z
+;
+  // check (3): 0 <= x * 2^k - c^2
+  // As (4) must also hold and 2c<2^{n-1}, len-1 bits is enough for the check
+  let checked_mid = check_size(mid, ref sizeasserters[len - 1])
+;
+  // check (4): x*2^2k - c^2 < 2c+1
+  // The right c satisfies c<2^{n-2}, implying 2c<2^{n-1}
+  // If Prover's c satisfies 2^{n-2}<=c<2^{n-1} then computation being modulo does not influence the checks (i.e. both checks cannot succeed)
+  assert_le'(checked_mid, Checked { val: right }, ref sizeasserters[len - 1])
+}
+
+fn coef_sqrt3[N : Nat, $S, @D]
+( x : uint[N] $S @D
+, len : u64 $pre @public
+, pplen : u64 $pre @public
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> uint[N] $S @D
+where Field[N]
+{ let ppmax : uint[N] $pre @public = pow_pre(2, pplen)
+; let res = uint_downcast(coef_sqrt_unchecked(x as $pre, ppmax))
+; if (post $S) { if (@prover <= @D) { check_coef_sqrt3(x, res, len, ppmax, ref sizeasserters) } }
+; res
+}
+
+pub fn sqrt_fixed3[N : Nat, $S, @D]
+( x : Fixed[N, $S, @D]
+, ref sizeasserters : list[SizeAsserter[N, $S, @D]]
+) -> Fixed[N, $S, @D]
+where Field[N] 
+{ let trash = check_size(x.coef, ref sizeasserters[x.len - 1])
+; let new_len = x.len
+; let new_pplen = x.pplen
+; let new_coef = coef_sqrt3(x.coef, x.len, x.pplen, ref sizeasserters)
+; fixed3(new_coef, new_len, new_pplen, ref sizeasserters)
+}
+
+pub fn sqrt_fixed[N : Nat, @D]
+( x : Fixed[N, $pre, @D]
+) -> Fixed[N, $pre, @D]
+where Field[N]
+{ let mut sizeasserters = sizeasserters_new(log2(N) as u64 - 2)
+; sqrt_fixed3(x, ref sizeasserters)
+}

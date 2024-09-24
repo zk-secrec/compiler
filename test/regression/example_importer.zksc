@@ -1,0 +1,5 @@
+use import_me::*;
+
+fn f(x : MyType[$pre, @public]) {
+    f(x)
+}

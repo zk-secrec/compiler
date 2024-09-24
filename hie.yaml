@@ -1,0 +1,12 @@
+cradle:
+  stack:
+    - path: "./src/"
+      component: "zkscc:lib"
+    - path: "./compiler/"
+      component: "zkscc:exe:zkscc"
+    - path: "./test/"
+      component: "zkscc:test:spec"
+    - path: "./sieveir/"
+      component: "sieveir:lib"
+    - path: "./language-server/"
+      component: "zkscc:exe:zksc-language-server"

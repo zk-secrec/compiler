@@ -1,0 +1,87 @@
+use ChrVec::*;
+use Integer::*;
+use Std::*;
+use Store::*;
+
+pub struct DFA[N : Nat, $S, @D] {
+    numStates : u64 $pre @public, // states are numbered from 0 to numStates-1
+    alphabetSize : u64 $pre @public, // characters are numbered from 0 to alphabetSize-1
+    trans : list[list[uint[N] $S @D]], // In state q, if the next character is c, then the next state will be trans[q][c]
+    init : uint[N] $S @D,
+    finals : list[uint[N] $S @D] // 0/1 array of length numStates, stating whether the state is a final state
+}
+
+pub fn init_dfa[N : Nat, $S, @D](numStates : u64 $pre @public, alphabetSize : u64 $pre @public, trans : list[list[uint[N] $S @D]], init : uint[N] $S @D, finals : list[uint[N] $S @D]) -> DFA[N, $S, @D] {
+  DFA
+  { numStates: numStates
+  , alphabetSize: alphabetSize
+  , trans: trans
+  , init: init
+  , finals: finals
+  }
+}
+
+pub fn dfa_to_prover[N : Nat, $S, @D](dfa : DFA[N, $S, @D]) -> DFA[N, $S, @prover] {
+  DFA
+  { numStates: dfa.numStates
+  , alphabetSize: dfa.alphabetSize
+  , trans: for i in 0 .. length(dfa.trans) { for j in 0 .. length(dfa.trans[i]) { dfa.trans[i][j] as @prover } }
+  , init: dfa.init as @prover
+  , finals: for i in 0 .. length(dfa.finals) { dfa.finals[i] as @prover }
+  }
+}
+
+pub fn dfa_to_pre[N : Nat, $S, @D](dfa : DFA[N, $S, @D]) -> DFA[N, $pre, @D] {
+    DFA {
+        numStates : dfa.numStates,
+        alphabetSize : dfa.alphabetSize,
+        trans : for i in 0 .. dfa.numStates { for j in 0 .. dfa.alphabetSize { dfa.trans[i][j] as $pre } },
+        init : dfa.init as $pre,
+        finals : for i in 0 .. dfa.numStates { dfa.finals[i] as $pre }
+    }
+}
+
+// strans will be contiguous and writeonce
+fn load_DFA_transitions_to_store[N : Nat](dfa : DFA[N, $post, @prover], ref strans : Store[N, $post, @prover]) where Field[N] {
+    let asize : uint[N] $post @prover = (wire { dfa.alphabetSize as uint[N] } ) as @prover;
+    let mut sidx : uint[N] $post @prover = 0;
+    for i in 0 .. dfa.numStates {
+        for j in 0 .. dfa.alphabetSize {
+            strans{# sidx } = dfa.trans[i][j];
+            sidx = sidx + 1;
+        };
+    };
+    {}
+}
+
+fn runDFA_with_store[N : Nat](dfa : DFA[N, $post, @prover], ref strans : Store[N, $post, @prover], w : list[uint[N] $post @prover]) -> bool[N] $post @prover where Field[N] {
+    let asize = (wire { dfa.alphabetSize as uint[N] } ) as @prover;
+    let mut s = dfa.init;
+    for i in 0 .. length(w) {
+        s = strans{# s * asize + w[i] };
+    }
+    is_zero(1 - scalar_prod(bool_list_to_uint(chrvec(dfa.numStates, s)), dfa.finals, dfa.numStates))
+}
+
+unchecked eff [*,*,[[*]],*,[*]] -> [*] -> * ! @public
+pub fn runDFA[N : Nat, $S, @D](dfa : DFA[N, $S, @D], w : list[uint[N] $S @D]) -> bool[N] $S @D where Field[N] {
+    if(post $S) {
+        if(@prover <= @D) {
+            let mut strs = {#};
+            load_DFA_transitions_to_store(dfa, ref strs);
+            runDFA_with_store(dfa, ref strs, w)
+        }
+        else {
+            let w_pre = for i in 0 .. length(w) { w[i] as $pre };
+            wire { runDFA(dfa_to_pre(dfa), w_pre) }
+        }
+    }
+    else {
+        let mut s : uint[N] $pre @D = dfa.init as @D;
+        for i in 0 .. length(w) {
+            s = (dfa.trans as @D)[s as u64][w[i] as u64];
+        }
+        (dfa.finals as @D)[s as u64] == 1
+    }
+}
+

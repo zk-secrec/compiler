@@ -1,0 +1,221 @@
+name:                zkscc
+version:             0.2.0.0
+synopsis:            ZK-SecreC compiler
+license:             BSD3
+author:              Härmel Nestra, Jaak Randmets, Joosep Jääger, Martin Pettai,  Peeter Laud, Ville Sokk
+maintainer:          Jaak Randmets <jaak.randmets@cyber.ee>
+copyright:           2024 Cybernetica AS
+category:            Compilers/Interpreters, Cryptography
+build-type:          Custom
+cabal-version:       2.0
+description:
+    Domain specific programming language for developing zero-knowledge
+    proof applications.
+data-files: stdlib/*.zksc circuits/*.txt
+
+custom-setup
+  setup-depends:
+    base,
+    Cabal,
+    process
+
+flag Release
+     Description: Release build. Only affects the version number.
+     Default:     False
+
+library
+  ghc-options:         -Wall -fno-warn-name-shadowing -fwarn-tabs -fno-warn-type-defaults -fno-ignore-asserts
+  hs-source-dirs:      src
+  default-language:    Haskell2010
+  build-tool-depends:  alex:alex, happy:happy
+  exposed-modules:     Basic.Location,
+                       Basic.Fixity,
+                       Basic.Message,
+                       Basic.Name,
+                       Basic.Var,
+                       CCC.Checks,
+                       CCC.Lexer,
+                       CCC.Parser,
+                       CCC.Syntax,
+                       CCC.SyntaxDump,
+                       CCC.Tokens,
+                       Compiler,
+                       CompilerException,
+                       ConfigurationCheck,
+                       Core.LambdaLifting,
+                       Core.Pretty,
+                       Core.Syntax,
+                       Core.Translate,
+                       Parser.Alex,
+                       Parser.Effect,
+                       Parser.HasEOF,
+                       Parser.LexAction,
+                       Parser.Lexer,
+                       Parser.Monad,
+                       Parser.Parser,
+                       Parser.Precedence,
+                       Parser.Syntax,
+                       Parser.SyntaxDump,
+                       Parser.Tokens,
+                       Rust.CoreToRust,
+                       Rust.PrimitiveTypes,
+                       Rust.SemanticsHelpers,
+                       Support.Bag,
+                       Support.EmbedCompressedFiles,
+                       Support.Pretty,
+                       Support.UniqMap,
+                       Support.UniqSet,
+                       Support.Unique,
+                       Typing.Builtin
+                       Typing.Constraints,
+                       Typing.ConstraintSolver,
+                       Typing.EffectChecker,
+                       Typing.Kind,
+                       Typing.Rename,
+                       Typing.StructEnv,
+                       Typing.TcM,
+                       Typing.Type,
+                       Typing.Typing,
+                       Typing.KindChecker,
+                       Version,
+                       EmbeddedStdlib
+  build-depends:       array,
+                       base >=4.12 && <5,
+                       aeson,
+                       bytestring,
+                       cmdargs,
+                       containers,
+                       directory,
+                       extra,
+                       filepath,
+                       hashable,
+                       lens,
+                       mtl,
+                       network,
+                       prettyprinter,
+                       primes,
+                       random,
+                       safe,
+                       sieveir,
+                       template-haskell,
+                       text,
+                       transformers,
+                       unordered-containers,
+                       vector,
+                       attoparsec,
+                       deepseq,
+                       zlib,
+                       file-embed,
+                       filemanip
+
+executable zkscc
+  main-is:             Main.hs
+  ghc-options:         -Wall -fno-warn-name-shadowing -fwarn-tabs -fno-warn-type-defaults -fno-ignore-asserts
+  hs-source-dirs:      compiler
+  default-language:    Haskell2010
+  other-modules:       DocGen
+  build-depends:       base >=4.12 && <5,
+                       aeson,
+                       array,
+                       bytestring,
+                       cmdargs,
+                       containers,
+                       directory,
+                       filepath,
+                       lens,
+                       primes,
+                       safe,
+                       sieveir,
+                       text,
+                       yaml,
+                       zkscc
+
+executable zksc-language-server
+  hs-source-dirs:   language-server
+  main-is:          Main.hs
+  ghc-options:      -Wall -fno-warn-name-shadowing -fwarn-tabs -fno-warn-type-defaults -fno-ignore-asserts
+  default-language: Haskell2010
+  other-modules:    Index
+  build-depends:    base >=4.12 && <5,
+                    cmdargs,
+                    containers,
+                    directory,
+                    filepath,
+                    lens,
+                    lsp,
+                    lsp-types,
+                    mtl,
+                    rope-utf16-splay,
+                    stm,
+                    text,
+                    transformers,
+                    unliftio-core,
+                    unordered-containers,
+                    zkscc
+
+executable ymlgen
+  main-is:          Main.hs
+  ghc-options:      -Wall -fno-warn-name-shadowing
+  hs-source-dirs:   ymlgen
+  default-language: Haskell2010
+  other-modules:    Yaml, 
+                    YamlGen, 
+                    CSV
+  build-depends:    base >= 4.12 && <5, 
+                    cmdargs,
+                    containers,
+                    filepath,
+                    directory,
+                    text,
+                    lens,
+                    zkscc
+
+executable testccc
+  main-is:          TestCCC.hs
+  ghc-options:      -Wall
+  hs-source-dirs:   test
+  default-language: Haskell2010
+  build-depends:    base >= 4.12 && <5, 
+                    containers,
+                    filepath,
+                    directory,
+                    bytestring,
+                    base16-bytestring,
+                    time,
+                    random,
+                    text,
+                    lens,
+                    mtl,
+                    zkscc
+
+test-suite spec
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Main.hs
+  ghc-options:      -Wall -fno-warn-name-shadowing -fwarn-tabs -fno-warn-type-defaults -fno-ignore-asserts
+  build-depends:    aeson,
+                    base >=4.12 && <5,
+                    bytestring,
+                    containers,
+                    data-default,
+                    directory,
+                    filepath,
+                    HUnit,
+                    hspec,
+                    lens,
+                    lsp-test,
+                    lsp-types,
+                    mtl,
+                    raw-strings-qq,
+                    regex-tdfa,
+                    sieveir,
+                    temporary,
+                    text,
+                    transformers,
+                    zkscc
+  default-language: Haskell2010
+  other-modules:    Examples,
+                    RegressionFiles,
+                    LanguageServer,
+                    SpecHelper,
+                    Typing

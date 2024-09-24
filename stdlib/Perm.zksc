@@ -1,0 +1,57 @@
+use Std::*;
+use Integer::*;
+use Prob::*;
+
+// Assumes that lists in xs and perm all have equal lengths
+fn apply_perm_pre[N : Nat, @D](xs : list[list[uint[N] $pre @D]], perm : list[u64 $pre @D]) -> list[list[uint[N] $pre @D]] {
+  for i in 0 .. length(xs) { 
+    for j in 0 .. length(xs[i]) { (xs[i] as $D)[perm[j]] }
+  }
+}
+
+fn perm_check_helper[N : Nat, @D]
+( cs : list[uint[N] $post @verifier]
+, xs : list[list[uint[N] $post @D]]
+) -> uint[N] $post @prover 
+{ let vs = for i in 0 .. length(xs[0]) 
+  { let ys = for j in 0 .. length(xs) { xs[j][i] as @prover }
+  ; scalar_prod(uint_list_to_prover(cs), ys, length(xs))
+  }
+; prod(vs)
+}
+
+/*
+. xs and ys must be lists of same length
+. all elements of xs and ys must have the same non-zero length
+. verifies that ys[i] is a permutation of xs[i]. Moreover, verifies that the permutation is the same for all i
+*/
+fn perm_check[N : Nat, @D](xs : list[list[uint[N] $post @D]], ys : list[list[uint[N] $post @D]]) 
+where Field[N], Challenge[N] {
+    dbg_assert(length(xs) == length(ys));
+    dbg_assert(length(xs[0]) == length(ys[0]));
+    for i in 1 .. length(xs) {
+        dbg_assert(length(xs[0]) == length(xs[i]));
+        dbg_assert(length(ys[0]) == length(ys[i]));
+    }
+    let n = length(xs);
+    let m = length(xs[0]) as uint;
+    let times = repetition_times(log2(N - 1) - log2(m + 1), 80) as u64;
+    let cs = uint_list_to_post(challenge((n * times) as uint));
+    for y in 0 .. times {
+      let local_cs = cs[y * n .. (y + 1) * n];
+      let vx = perm_check_helper(local_cs, xs);
+      let vy = perm_check_helper(local_cs, ys);
+      assert_zero(vx - vy);
+    };
+}
+
+pub fn apply_perm[N : Nat, $S, @D](xs : list[list[uint[N] $S @D]], perm : list[u64 $pre @D]) -> list[list[uint[N] $S @D]]
+  where Field[N], Challenge[N] {
+  if (post $S) {
+    let xs1 = for i in 0 .. length(xs) { uint_list_to_pre(xs[i]) };
+    let ys1 = apply_perm_pre(xs1, perm);
+    let ys = for i in 0 .. length(xs) { uint_list_to_post(ys1[i]) };
+    if (@prover <= @D) { perm_check(xs, ys); };
+    ys
+  } else { apply_perm_pre(xs, perm) }
+}

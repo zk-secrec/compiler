@@ -1,0 +1,13 @@
+struct A {
+    x : uint $post @prover
+}
+
+fn main(){
+    let x : uint $post @prover = 3;
+    let a : A = A {
+        x: x
+    };
+    let a' = A {
+        x: x
+    };
+}

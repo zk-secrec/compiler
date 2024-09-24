@@ -1,0 +1,402 @@
+use Integer::*;
+use Std::*;
+
+//23 bit mantissa, 8 bit exponent
+pub struct Float[N : Nat, $S, @D] {
+    sign : bool[N] $S @D,
+    significand : uint[N] $S @D,
+    exponent : uint[N] $S @D,
+}
+
+pub fn float[N : Nat, $S, @D](sign : bool[N] $S @D,
+                            significand : uint[N] $S @D,
+                            exponent : uint[N] $S @D) -> Float[N, $S, @D] {
+    //TODO: Check whether user-given significands/exponents fit within bit length. Maybe check_fit should go into Std
+    Float{
+        sign : sign,
+        significand : significand,
+        exponent : exponent,
+    }
+}
+
+//Controlled right shift
+//Divides a number by 1 if dummy==true, 2 otherwise.
+fn __div12[N : Nat, $S, @D](x : uint[N] $S @D, dummy : bool[N] $S @D) -> uint[N] $S @D where Field[N] {
+    if post $S {
+        let x_half = wire{x as $pre / 2};
+        let last_bit_2 : bool[2] $S @D = wire{((x as $pre % 2) == 1) as bool[2]};
+        assert_zero(x_half * 2 + last_bit_2 as bool[N] as uint[N] - x);
+        uint_cond(dummy,x,x_half)
+    } else {
+        if (dummy) {x} else {x / 2}
+    }
+}
+
+pub fn bitstring[N : Nat, $S, @D](x : uint[N] $S @D, bw : uint $pre @public) -> string $pre @D {
+    let mut s = "";
+    let mut current = x as $pre;
+    for i in 0..bw {
+        let bit = if (current % 2 ==  0) {"0"} else {"1"};
+        s = bit ++ s;
+        current = current / 2;
+    }
+    trace "number had remaining bits" {
+        dbg_assert(current == 0 | current == 1);
+    }
+    s
+}
+
+pub fn uint_to_float[N : Nat, $S, @D](x : uint[N] $S @D) -> Float[N, $S, @D] where Field[N] {
+    /*
+        We are going to shift the number either right or left so that the leading 1 exists (the one that will be removed)
+        Large numbers need to be shifted to the right (this includes the perfectly aligned number), small ones to the left.
+    */
+    let pbw = prime_bw();
+    let bw = sig_bw();
+    let bw_n = sig_bw_n();
+    let x_bits = bitextract(x,pbw);
+
+    //////Right-shift section
+    //shift number to the right as much as possible (number is too big to fit in bw)
+    let mut big_mantissa = x;
+    let mut big_exponent = bias() + bw_n as @D;
+    let mut found_msb_big = false;
+    
+    for i in 0..pbw - bw - 1 {
+        found_msb_big = found_msb_big | x_bits[pbw-i-1];
+        big_mantissa = __div12(big_mantissa,!found_msb_big);
+        big_exponent = big_exponent + found_msb_big as uint[N];
+    }
+
+    //if we didnt find the msb bit in the loop but it was already in the perfect place
+    found_msb_big = found_msb_big | x_bits[bw];
+    if found_msb_big as $pre {
+        trace "checking if shifting a big number right gives correct mantissa" {
+            trace "mantissa too big" {
+                dbg_assert(big_mantissa as $pre < leading_bit()*2);
+            }
+            trace "mantissa too small" {
+                dbg_assert(big_mantissa as $pre >= leading_bit());
+            }
+        }
+    }
+
+    big_mantissa = big_mantissa - leading_bit();
+
+    //////Left-shift section
+    //shift number to the left to get a 1 right after bw(), might just shift a ton and do nothing if the number is big.
+
+    let mut small_mantissa = x;
+    let mut small_exponent = bias() + bw_n as @D;
+    let mut found_msb_small = false;
+    for i in 0..bw+1 {
+        found_msb_small = found_msb_small | x_bits[bw-i];
+        small_mantissa = small_mantissa * (1 + !found_msb_small as uint[N]);
+        small_exponent = small_exponent - !found_msb_small as uint[N];
+    }
+
+    if !found_msb_big as $pre {
+        trace "checking if shifting a small number left gives correct mantissa" {
+            trace "mantissa too big" {
+                dbg_assert(small_mantissa as $pre < leading_bit()*2);
+            }
+            trace "mantissa too small" {
+                dbg_assert(small_mantissa as $pre >= leading_bit() | x as $pre == 0);
+            }
+        }
+    }
+
+    small_mantissa = small_mantissa - leading_bit();
+
+    //RESULT
+    //take the big version if it existed
+    let mut res_mantissa = uint_cond(found_msb_big,big_mantissa,small_mantissa);
+    let mut res_exponent = uint_cond(found_msb_big,big_exponent,small_exponent);
+
+    //if no bit was found in either part of the input, we have zero
+    //zero has both the mantissa and exponent bits set to 0
+    let no_bits_found = !(found_msb_big | found_msb_small);
+    res_mantissa = uint_cond(no_bits_found,0,res_mantissa);
+    res_exponent = uint_cond(no_bits_found,0,res_exponent);
+
+    Float {
+        sign : false,
+        significand : res_mantissa,
+        exponent : res_exponent
+    }
+
+}
+
+pub fn debug_print_float[N : Nat, $S, @D](x : Float[N, $S, @D]) where Field[N] {
+    if x.exponent as $pre == 0 & x.significand as $pre == 0 {
+        dbg_print("0.0" as @public)
+    } else {
+        let exp_pre = x.exponent as $pre;
+        let exp_signstr = if exp_pre < bias() {"-"} else {""};
+        let exp_absval = if exp_pre > bias() {exp_pre - bias()} else {bias() - exp_pre};
+        let mut s = "1."++(bitstring(x.significand,sig_bw())++(" * 2^"++(exp_signstr ++ to_string(exp_absval))));
+        s = if x.sign as $pre {"-("++(s++")")} else {s};
+        dbg_print(s ++ (" (int): "++ to_string(trunc(x) as $pre)))
+    }
+}
+
+pub fn trunc[N: Nat, $S, @D](x : Float[N, $S, @D]) -> uint[N] $S @D where Field[N] {
+    let mut result = x.significand+leading_bit(); //putting back the last bit
+    let bw_n : uint[N] $S @D = sig_bw_n() as @D;
+    let bw = sig_bw();
+    let mut exp_t = bw_n + bias() - x.exponent;
+
+    let truncable = ge(x.exponent,bias(),exp_bw());
+
+    let mut at_zero : bool[N] $S @D = false;
+
+    for i in 0..bw {
+        let inference_help : uint $pre @public = i;
+        at_zero = is_zero(exp_t) | at_zero;
+        exp_t = exp_t - (!at_zero) as uint[N];
+
+        result = __div12(result,at_zero);
+    } 
+    uint_cond(truncable,result,0)
+}
+
+pub fn shift_right[N : Nat, $S, @D](x : uint[N] $S @D, shift : uint[N] $S @D) -> uint[N] $S @D where Field[N] {
+    let mut new_mantissa = x;
+    let mut rem_shift = shift;
+    let mut done_shifting : bool[N] $S @D = is_zero(shift);
+    for i in 0..sig_bw() {
+        let inference_help : uint $pre @public = i;
+
+        new_mantissa = __div12(new_mantissa,done_shifting);
+
+        rem_shift = rem_shift - 1;
+        done_shifting = done_shifting | is_zero(rem_shift);
+    }
+
+    new_mantissa
+}
+
+pub fn shift_left[N : Nat, $S, @D](x : uint[N] $S @D, shift : uint[N] $S @D) -> uint[N] $S @D where Field[N] {
+    let x_bits = bitextract(x,sig_bw());
+
+    let mut new_mantissa = x;
+    let mut rem_shift = shift;
+    let mut done_shifting : bool[N] $S @D = is_zero(shift);
+    for i in 0..sig_bw() {
+        done_shifting = done_shifting | is_zero(rem_shift);
+        new_mantissa = new_mantissa*uint_cond(done_shifting,1,2);
+        new_mantissa = uint_cond(x_bits[sig_bw()-1-i] & !done_shifting,new_mantissa - leading_bit(),new_mantissa);
+
+        rem_shift = rem_shift - 1;
+    }
+    new_mantissa
+}
+
+pub fn float_cond[N : Nat, $S, @D](b : bool[N] $S @D, x : Float[N, $S, @D], y : Float[N, $S, @D]) -> Float[N, $S, @D] where Field[N] {
+    float(
+        bool_cond(b,x.sign,y.sign),
+        uint_cond(b,x.significand,y.significand),
+        uint_cond(b,x.exponent,y.exponent)
+    )
+}
+
+pub fn add_float[N : Nat, $S, @D](x : Float[N, $S, @D], y : Float[N, $S, @D]) -> Float[N, $S, @D] where Field[N] {
+    /*
+        We find the (absolute value) larger float. Its sign will dominate, and so we shift the smaller
+        float to its exponent, and add/subtract to the larger float.
+    */
+    let bw = sig_bw();
+    let x_smaller = lt_float_abs(x,y);    
+    let bigger_float = float_cond(x_smaller,y,x);
+    let smaller_float = float_cond(x_smaller,x,y);
+    let new_smaller_mantissa = shift_right(smaller_float.significand + leading_bit(),bigger_float.exponent - smaller_float.exponent);
+    let adding = x.sign & y.sign | !x.sign & !y.sign;
+    let sum_mantissa = uint_cond(adding,new_smaller_mantissa + bigger_float.significand + leading_bit(),bigger_float.significand + leading_bit() - new_smaller_mantissa);
+    let sum_bits = bitextract(sum_mantissa,bw+2);
+
+    /*
+        We now need to do two shifts:
+            1) if we added and it overflowed, we need to shift right
+            2) if we subtracted and the result is small, we need to shift left
+        
+        The shift right is simply by 1 place, but the left shift is equal to the number of trailing zeroes in the mantissa.
+
+        We calculate both versions, and take the one we need. 
+    */
+
+    //Right shift
+    let shift_right_needed = sum_bits[bw+1];
+
+    let right_shifted_mantissa = uint_cond(shift_right_needed,__div12(sum_mantissa,false),sum_mantissa);
+    let right_shifted_exponent = bigger_float.exponent + shift_right_needed as uint[N];
+
+    //Left shift
+    let shift_left_needed = !sum_bits[bw+1] & !sum_bits[bw];
+
+    let mut left_shifted_mantissa = sum_mantissa;
+    let mut left_shifted_exponent = bigger_float.exponent;
+
+    let mut done_shifting= false;
+    for i in 0..bw {
+        done_shifting = done_shifting | sum_bits[bw-i];
+
+        left_shifted_mantissa = left_shifted_mantissa*uint_cond(done_shifting,1,2);
+        left_shifted_exponent = left_shifted_exponent-uint_cond(done_shifting,0,1);
+    }
+    //if no done_shifting is found, the answer is 0. 
+    //setting mantissa to leading_bit() instead of 0 so all branches remove leading_bit() later
+    left_shifted_mantissa = uint_cond(done_shifting,left_shifted_mantissa,leading_bit()); 
+    left_shifted_exponent = uint_cond(done_shifting,left_shifted_exponent,0);
+
+    //take the appropriate output. 
+    //left_shift_needed can only be true in the case of subtraction and once it is set, and then the left shifted one MUST be taken
+    let res_sign = bool_cond(adding,x.sign,bigger_float.sign);
+    let res_mantissa = uint_cond(shift_left_needed,left_shifted_mantissa,right_shifted_mantissa) - leading_bit();
+    let res_exponent = uint_cond(shift_left_needed,left_shifted_exponent,right_shifted_exponent);
+    
+    Float {
+        sign : res_sign,
+        significand : res_mantissa,
+        exponent : res_exponent
+    }
+}
+
+//assumes N prime
+pub fn mul_float[N : Nat, $S, @D](x : Float[N, $S, @D], y : Float[N, $S, @D]) -> Float[N, $S, @D] where Field[N] {
+    let bw = sig_bw();
+    let multiplying_zero = is_float_zero(x) | is_float_zero(y);
+
+    let res_sign = x.sign & !y.sign | !x.sign & y.sign;
+
+    //the exponent is simply the sum, but this might incur a +1 with overlow at the end
+    let exponent_sum = x.exponent + y.exponent - bias();
+    let top_bit = leading_bit();
+
+    //calculate the product, the bit width of the product, and its bit representation
+    //the top bit must be added back as we store the significand without it
+    let product = (x.significand + top_bit) * (y.significand + top_bit);
+    let product_bitlen = (bw+1)*2;
+    let product_bits = bitextract(product,product_bitlen);
+
+    //the product is shifted a lot to the left, and we need to properly align it.
+    //this is sadly not a constant amount of shifting, because the top bit might not be set
+    //TODO: find out if this is better done with doing 2**constant * (1+product_bits[top_bit])
+
+    let _bw : uint[N] $S @D = sig_bw_n() as @D;
+    let shifting_amount = product_bitlen - bw - 1;
+    
+    let mut found_msb = false;
+    let mut shifted_product = product;
+    for i in 0..shifting_amount {
+        found_msb = found_msb | product_bits[product_bitlen-1-i];
+        shifted_product = __div12(shifted_product,!found_msb);
+    }
+
+    trace "checking if product gives valid mantissa" {
+        if !multiplying_zero as $pre {
+            trace "mantissa too small" {
+                dbg_assert(shifted_product as $pre >= top_bit as $pre);
+            }
+            trace "mantissa too big" {
+                dbg_assert(shifted_product as $pre < top_bit as $pre *2);
+            }
+        }
+    } 
+
+    //exponent gets 1 added when overflow happened
+    let mut res_exponent = uint_cond(product_bits[product_bitlen-1],exponent_sum+1,exponent_sum);
+    let mut res_significand = shifted_product - top_bit;
+
+    //in case an input was zero, zero out the result as well
+    res_exponent = uint_cond(multiplying_zero,0,res_exponent);
+    res_significand = uint_cond(multiplying_zero,0,res_significand);
+
+    Float{
+        sign : res_sign,
+        significand : res_significand,
+        exponent : res_exponent
+    }
+}
+
+// Comparisons assume N is prime,
+// also that every float value has a unique well-formed representation.
+// This means that because we only check exponent in is_zero, two values can have true for is_zero
+// while not being equal by eq_float. One of them would have to be ill-formed in this situation.
+// Does NOT ignore the sign of zero!
+pub fn eq_float[N : Nat, $S, @D](x : Float[N, $S, @D], y : Float[N, $S, @D]) -> bool[N] $S @D where Field[N] {
+    (equiv(x.sign, y.sign)) & eq(x.exponent, y.exponent) & eq(x.significand, y.significand)
+}
+
+pub fn lt_float[N : Nat, $S, @D](x : Float[N, $S, @D], y : Float[N, $S, @D]) -> bool[N] $S @D where Field[N] {
+    let eq_exponent = eq(x.exponent, y.exponent);
+    let lt_exponent = lt(x.exponent, y.exponent, sig_bw());
+    let eq_mantissa = eq(x.significand, y.significand);
+    let lt_mantissa = lt(x.significand, y.significand, sig_bw());
+    let lt_abs = lt_exponent | (eq_exponent & lt_mantissa);
+    let eq_abs = eq_exponent & eq_mantissa;
+    let gt_abs = !(lt_abs | eq_abs);
+
+    // equiv to (x.sign & !y.sign) | (x.sign & y.sign & gt_abs) | (!x.sign & !y.sign & lt_abs)
+    (x.sign & (!y.sign | gt_abs)) | (!x.sign & !y.sign & lt_abs)
+}
+
+/// to make this more efficient, ideally we'd want a three-output comparison, so LT, EQ, GT would be an enum
+pub fn lt_float_abs[N : Nat, $S, @D](x : Float[N, $S, @D], y : Float[N, $S, @D]) -> bool[N] $S @D where Field[N] {
+    let eq_exponent = eq(x.exponent,y.exponent);
+    let lt_exponent = lt(x.exponent,y.exponent,sig_bw());
+    let lt_mantissa = lt(x.significand,y.significand,sig_bw());
+
+    lt_exponent | (eq_exponent & lt_mantissa)
+}
+
+pub fn gt_float[N : Nat, $S, @D](x : Float[N, $S, @D], y : Float[N, $S, @D]) -> bool[N] $S @D where Field[N] {
+    lt_float(y,x)
+}
+
+pub fn le_float[N : Nat, $S, @D](x : Float[N, $S, @D], y : Float[N, $S, @D]) -> bool[N] $S @D where Field[N] {
+    !lt_float(y,x)
+}
+
+pub fn ge_float[N : Nat, $S, @D](x : Float[N, $S, @D], y : Float[N, $S, @D]) -> bool[N] $S @D where Field[N] {
+    !lt_float(x,y)
+}
+
+pub fn negate_float[N : Nat, $S, @D](x : Float[N, $S, @D]) -> Float[N, $S, @D] {
+    Float{
+        sign : !x.sign,
+        significand : x.significand,
+        exponent : x.exponent
+    }
+}
+
+//assumes that N is prime. Non-trivial as `is_zero` uses `mod_div` under the hood.
+//The reason why we don't check the significand is because we don't support subnormals.
+pub fn is_float_zero[N : Nat, $S, @D](x : Float[N, $S, @D]) -> bool[N] $S @D where Field[N] {
+    is_zero(x.exponent)
+}
+
+fn prime_bw() -> uint $pre @public {
+    61
+}
+
+pub fn sig_bw() -> uint $pre @public {
+    23
+}
+
+pub fn sig_bw_n[N : Nat, $S]() -> uint[N] $S @public {
+    23
+}
+
+pub fn exp_bw[N : Nat, $S]() -> uint[N] $S @public {
+    8
+}
+
+pub fn bias[N : Nat, $S, @D]() -> uint[N] $S @D {
+    127
+}
+
+fn leading_bit[N : Nat, $S, @D]() -> uint[N] $S @D {
+    8388608
+}
+
+ 

@@ -1,0 +1,20 @@
+pub fn prefixfn[N : Nat,@D](str : list[uint[N] $pre @D] $pre @D) -> list[uint[N] $pre @D] $pre @D {
+  let m = length(str);
+  let rec prxs = for j in 0 .. m {
+    let mut j1 = j;
+    let mut res = 0;
+    for z in 0 .. j {
+      if (j1 == 0) { break; }
+      else {
+        j1 = prxs[j1 - 1];
+        if (str[j] == str[j1]) {
+          res = j1 + 1;
+          break;
+        }
+      };
+    };
+    res
+  };
+  for j in 0 .. m { prxs[j] as uint[N] }
+}
+

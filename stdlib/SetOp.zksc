@@ -1,0 +1,83 @@
+use Std::*;
+use Integer::*;
+use Bitextract::*;
+use Prob::*;
+use Inequalities::*;
+use IsFromFirst::*;
+
+unchecked eff * -> [*] -> [*] -> * -> * ! @D
+fn add_one[N : Nat, @D](x : uint[N] $pre @D, ys : list[uint[N] $pre @D], ref zs : list[uint[N] $pre @D], k : u64 $pre @public) {
+  if (k >= length(ys)) { dbg_assert(false : bool $pre @D); }
+  else if (ys[k] == x) { zs[k] = zs[k] + 1; }
+  else { add_one(x, ys, ref zs, k + 1) }
+}
+
+unchecked eff * -> [*] -> [*] -> * -> * ! @D
+fn add_tru[N : Nat, @D](x : uint[N] $pre @D, ys : list[uint[N] $pre @D], ref zs : list[bool[N] $pre @D], k : u64 $pre @public) {
+  if (k >= length(ys)) { dbg_assert(false : bool $pre @D); }
+  else if (!zs[k] & ys[k] == x) { zs[k] = true; }
+  else { add_tru(x, ys, ref zs, k + 1) }
+}
+
+fn multiplicities[N : Nat, @D](xs : list[uint[N] $pre @D], ys : list[uint[N] $pre @D]) -> list[uint[N] $pre @D] {
+  let n = length(xs);
+  let m = length(ys);
+  let mut res = [0; m];
+  for i in 0 .. n {
+    add_one(xs[i], ys, ref res, 0);
+  };
+  res
+}
+
+fn occurrences[N : Nat, @D](xs : list[uint[N] $pre @D], ys : list[uint[N] $pre @D]) -> list[bool[N] $pre @D] {
+  let n = length(xs);
+  let m = length(ys);
+  let mut res = [false; m];
+  for i in 0 .. n {
+    add_tru(xs[i], ys, ref res, 0);
+  };
+  res
+}
+
+pub fn assert_subset_norep[N : Nat, @D](xs : list[uint[N] $post @prover], ys : list[uint[N] $post @D]) 
+  where Field[N], Challenge[N] {
+  let n = length(xs);
+  let m = length(ys);
+  let xs_prover = for i in 0 .. n { xs[i] as @prover };
+  let ys_prover = for j in 0 .. m { ys[j] as @prover };
+  let es_pre = multiplicities(uint_list_to_pre(xs_prover), uint_list_to_pre(ys_prover));
+  let es = for j in 0 .. m { wire { es_pre[j] } };
+  let times = repetition_times(log2(N - 1) - log2(n as uint), 80);
+  let rs = uint_list_to_prover(uint_list_to_post(challenge(times as uint)));
+  for y in 0 .. times {
+    let bw = 1 + log2(n as uint) as u64;
+    let p1 = prod(for i in 0 .. n { rs[y] - xs_prover[i] });
+    let p2 = prod(for j in 0 .. m { pow(rs[y] - ys_prover[j], es[j], bw) });
+    assert_zero(p1 - p2)
+  };
+}
+
+pub fn assert_subset[N : Nat, @D](xs : list[uint[N] $post @prover], ys : list[uint[N] $post @D]) 
+  where Field[N], Challenge[N] {
+  let n = length(xs);
+  let m = length(ys);
+  let xs_prover = for i in 0 .. n { xs[i] as @prover };
+  let ys_prover = for j in 0 .. m { ys[j] as @prover };
+  let es_pre = occurrences(uint_list_to_pre(xs_prover), uint_list_to_pre(ys_prover));
+  let es = for j in 0 .. m { wire { es_pre[j] } };
+  let times = repetition_times(log2(N - 1) - log2(m as uint), 80);
+  let rs = uint_list_to_prover(uint_list_to_post(challenge(times as uint)));
+  for y in 0 .. times {
+    let p1 = prod(for i in 0 .. n { rs[y] - xs_prover[i] });
+    let p2 = prod(for j in 0 .. m { let b = es[j] as uint[N]; (1 - b) + b * (rs[y] - ys_prover[j]) });
+    assert_zero(p1 - p2)
+  };
+}
+
+pub fn assert_disjoint[N : Nat](xs : list[uint[N] $post @verifier], ys : list[uint[N] $post @prover], ref sizeasserter : SizeAsserter[N, $post, @prover])
+  where Field[N], Challenge[N] {
+  let n = length(xs);
+  let m = length(ys);
+  let zs = is_from_first(xs, ys, ref sizeasserter);
+  assert(!any(for j in 0 .. m { zs[j + n] }));
+}

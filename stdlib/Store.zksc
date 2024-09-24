@@ -1,0 +1,283 @@
+/*
+ * Copyright 2024 Cybernetica AS
+ * 
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+use Std::*;
+use Integer::*;
+use Inequalities::*;
+use Waksman::*;
+use Perm::*;
+
+// Sort lists by (k, i)
+fn sort_lists[N : Nat]
+( ops : list[uint[N] $post @prover]
+, keys : list[uint[N] $post @prover]
+, values : list[uint[N] $post @prover]
+, writeOnce : bool $pre @public
+) -> list[list[uint[N] $post @prover]]
+where Field[N], Vectorization
+{ 
+  if (Challenge[N])
+  { let sortPerm = __get_sorting_permutation(for i in 0 .. length(keys) { keys[i] as $pre as uint })
+  ; let idxs = for i in 0..length(keys) { (wire { i as uint[N] }) as @prover }
+  ; apply_perm([ops, keys, values, idxs], sortPerm)
+  } else
+  { let reorderSwitches : list[bool[N] $post @prover] = get_switches_for_sorting(for i in 0..length(keys) { keys[i] as $pre })
+  ; let permNw = make_waksman_network(length(keys))
+  ;
+    // if we want to state that updates must happen first, then we have to bring back this permutation
+    let sortedOps = if (writeOnce) { [] } else { apply_switching_network_uint(ops, permNw, reorderSwitches) }
+  ; let sortedKeys = apply_switching_network_uint(keys, permNw, reorderSwitches)
+  ; let sortedValues = apply_switching_network_uint(values, permNw, reorderSwitches)
+  ; let sortedIdxs = if (writeOnce) { [] } else { apply_switching_network_uint(for i in 0 .. length(keys) { (wire { i as uint[N] }) as @prover }, permNw, reorderSwitches) }
+  ; [sortedOps, sortedKeys, sortedValues, sortedIdxs]
+  }
+
+}
+
+// Assumes that length(keys) > 0
+fn finalize_store_helper[N : Nat]
+( opers : list[bool $pre @public]
+, keys : list[uint[N] $post @prover]
+, values : list[uint[N] $post @prover]
+, writeOnce : bool $pre @public
+, contiguous : bool $pre @public
+, def : bool $pre @public
+)
+where Field[N], Vectorization
+{
+  // Assuming that all arguments have the same length
+  let ops : list[uint[N] $post @prover] = for i in 0 .. length(opers) 
+  { (wire { opers[i] as bool[N] as uint[N] }) as @prover
+  }
+; let ys = sort_lists(ops, keys, values, writeOnce)
+; let sortedOps = ys[0]
+; let sortedKeys = ys[1]
+; let sortedValues = ys[2]
+; let sortedIdxs : list[uint[N] $post @prover] = ys[3]
+;
+
+  let mut key_sizeasserter = sizeasserter_new(log2(N) as u64 - 2)
+; let mut idx_sizeasserter = sizeasserter_new(field_bit_width(length(sortedIdxs) as uint))
+;
+  let sortedKeysBits = if (contiguous) { [] } else { for i in 0 .. length(sortedKeys) { check_size(sortedKeys[i], ref key_sizeasserter) } }
+; let sortedIdxsBits = if (writeOnce) { [] } else { for i in 0 .. length(sortedIdxs) { Checked { val: sortedIdxs[i] } } }
+;
+
+  if (!writeOnce) 
+  { if (def) 
+    { // op_1 = U \/ val_1 = 0
+      assert_zero(sortedOps[0] * sortedValues[0])
+    } else 
+    { // op_1 = U
+      assert_zero(sortedOps[0])
+    }
+  }
+; for j in 0 .. length(opers) - 1
+  { let keysEq = if (contiguous) { sortedKeys[j] + 1 - sortedKeys[j + 1] } 
+                 else { is_zero(sortedKeys[j] - sortedKeys[j + 1]) as uint[N] }
+  ; if (writeOnce) 
+    { // k_j = k_{j+1} ==> v_j = v_{j+1}
+      assert_zero(keysEq * (sortedValues[j] - sortedValues[j + 1]))
+      // no checks about the updates. But could probably add it like this:
+      // k_j /= k_{j+1} <=> op_{j+1} = U (that will be two assertions)
+    } else 
+    { // k_j = k_{j+1} /\ op_{j+1} = L => v_j = v_{j+1}
+      assert_zero(sortedOps[j + 1] * keysEq * (sortedValues[j] - sortedValues[j + 1]))
+    ; if (def) 
+      { // k_j /= k_{j+1} => op_{j+1} = U \/ val_{j+1} = 0
+        assert_zero((1 - keysEq) * sortedOps[j + 1] * sortedValues[j + 1])
+      } else 
+      { // k_j /= k_{j+1} => op_{j+1} = U
+        assert_zero((1 - keysEq) * sortedOps[j + 1])
+      }
+    }
+  ;
+    // Sorting checks
+    if (contiguous) { assert_zero(keysEq * (keysEq - 1)) } 
+    else { assert_le'(sortedKeysBits[j], sortedKeysBits[j + 1], ref key_sizeasserter) }
+    // Sorting stability check
+  ; if (!writeOnce) 
+    { let leq = le3'(sortedIdxsBits[j + 1], sortedIdxsBits[j], ref idx_sizeasserter)
+    ; assert_zero(keysEq * leq as uint[N])
+    }
+  }
+;
+}
+
+fn finalize_store_classic[N : Nat]
+( opers : list[bool $pre @public]
+, keys : list[uint[N] $post @prover]
+, values : list[uint[N] $post @prover]
+, writeOnce : bool $pre @public
+, contiguous : bool $pre @public
+, def : bool $pre @public
+)
+where Field[N], Vectorization {
+
+  let w = count(opers, fn (x) { !x as b64 } );
+  let r = length(opers) - w;
+  if (writeOnce as b64 & w > 0) {
+    let mut wcnt = 0;
+    let mut rcnt = 0;
+    let opers1 = for i in 0 .. w + r { (i >= w) as bool };
+    let mut keys1 = for i in 0 .. w + r { 0 };
+    let mut values1 = for i in 0 .. w + r { 0 };
+    for i in 0 .. w + r {
+      if (opers[i]) {
+        keys1[w + rcnt] = keys[i];
+        values1[w + rcnt] = values[i];
+        rcnt = rcnt + 1;
+      } else {
+        keys1[wcnt] = keys[i];
+        values1[wcnt] = values[i];
+        wcnt = wcnt + 1;
+      }
+    }
+    let k = r / w;
+    let enum = 19;
+    let eden = 7;
+    let mut enumpow = 1;
+    let mut edenpow = 1;
+    let mut x = 0;
+    for i in 1 .. k {
+      enumpow = enum * enumpow;
+      edenpow = eden * edenpow;
+      if (enumpow < 2 * (1 + i) * w * edenpow) { x = x + 1; }
+      else { break; }
+    };
+    let xN = x as uint[N];
+    let kN = k as uint[N];
+    let wN = w as uint[N];
+    if (xN > 1 & pow_pre(2 * (1 + xN), 1 + x) * wN < pow_pre(kN + 1, x)) {
+      let l = k / x;
+      for i in 0 .. l {
+        let m = if (i < l - 1) { w + x * w } else { w + r - (l - 1) * x * w };
+        let opers_small = for j in 0 .. m { (j >= w) as bool };
+        let keys_small = for j in 0 .. m { if (j < w) { keys1[j] } else { keys1[i * x * w + j] }};
+        let values_small = for j in 0 .. m { if (j < w) { values1[j] } else { values1[i * x * w + j] }};
+        finalize_store_helper(opers_small, keys_small, values_small, writeOnce, contiguous, def);
+      };
+    } else { finalize_store_helper(opers1, keys1, values1, writeOnce, contiguous, def); }
+  } else { finalize_store_helper(opers, keys, values, writeOnce, contiguous, def); };
+}
+
+fn finalize_store[N : Nat]
+( opers : list[bool $pre @public]
+, keys : list[uint[N] $post @prover]
+, values : list[uint[N] $post @prover]
+, writeOnce : bool $pre @public
+, contiguous : bool $pre @public
+, def : bool $pre @public
+)
+where Field[N], Vectorization 
+{ if (Challenge[N]) 
+  { dbg_print(string_append("Finalizing $post @prover challenge store with ", string_append(to_string(length(opers)), " operations")))
+  ; finalize_store_helper(opers, keys, values, writeOnce, contiguous, def) 
+  } else 
+  { dbg_print(string_append("Finalizing $post @prover waksman store with ", string_append(to_string(length(opers)), " operations")))
+  ; finalize_store_classic(opers, keys, values, writeOnce, contiguous, def) 
+  }
+}
+
+// Set whether to use --stores-default for a given $pre store (def = true) or not (def = false).
+unchecked eff * -> * -> * ! @public
+pub extern fn set_store_default[N : Nat, @D](ref st : store[uint[N], uint[N]] $pre @D, def : bool $pre @D);
+
+pub struct Store[N : Nat, $S, @D] {
+    opers : list[bool $pre @public],
+    keys : list[uint[N] $S @D],
+    values : list[uint[N] $S @D],
+    stor : store[uint[N], uint[N]] $pre @D,
+    writeOnce : bool $pre @public,
+    contiguous : bool $pre @public,
+    def : bool $pre @public,
+}
+
+impl Store {
+    fn finalize[N : Nat, $S, @D](st : Store[N, $S, @D])
+      where Field[N], Vectorization {
+        let mut st_copy = st;
+        if (post $S) {
+            if (@prover <= @D) {
+              if (length(st.keys) > 0) {
+                finalize_store(st.opers, st.keys, st.values, st.writeOnce, st.contiguous, st.def);
+              }
+            } else {
+              dbg_print("Skipping finalization of non-@prover store" : string $pre @D);
+            }
+        } else {
+            dbg_print("Skipping finalization of $pre store" : string $pre @D);
+        }
+    }
+}
+
+pub fn store_new[N : Nat, $S, @D](writeOnce : bool $pre @public, contiguous : bool $pre @public, def : bool $pre @public) -> Store[N, $S, @D]
+  where Field[N] { // we add the Field constraint here because it is currently not checked when finalize is called automatically
+    let mut stor = {## };
+    set_store_default(ref stor, def as @D);
+    Store {
+        opers : [],
+        keys : [],
+        values : [],
+        stor : stor,
+        writeOnce : writeOnce,
+        contiguous : contiguous,
+        def : def,
+    }
+}
+
+pub fn store_new_nodef[N : Nat, $S, @D]() -> Store[N, $S, @D]
+  where Field[N] {
+    store_new(false, false, false)
+}
+
+pub fn store_new_def[N : Nat, $S, @D]() -> Store[N, $S, @D]
+  where Field[N] {
+    store_new(false, false, true)
+}
+
+pub fn store_read[N : Nat, $S, @D](ref st : Store[N, $S, @D], key : uint[N] $S @D) -> uint[N] $S @D 
+  where Field[N] {
+    if (post $S) {
+        let k = key as $pre;
+
+        // Uncomment if you want traceable error messages for unknown reads (but this is expensive)
+        // let keys_pre = uint_list_to_pre(st.keys);
+        // dbg_assert(st.def as bool[N] as @D | count(keys_pre, fn (x) { x == k }) > 0);
+
+        let v = st.stor{## k};
+        let val = wire{v};
+        list_push(ref st.opers, true); // true = read
+        list_push(ref st.keys, key);
+        list_push(ref st.values, val);
+        val
+    } else {
+        st.stor{## key}
+    }
+}
+
+pub fn store_write[N : Nat, $S, @D](ref st : Store[N, $S, @D], key : uint[N] $S @D, val : uint[N] $S @D) {
+    if (post $S) {
+        let k = key as $pre;
+
+        // Uncomment if you want traceable error messages for double writes (but this is expensive)
+        // let keys_pre = uint_list_to_pre(st.keys);
+        // dbg_assert(!st.writeOnce as bool[N] as @D | count(keys_pre, fn (x) { x == k }) == 0);
+
+        let v = val as $pre;
+        list_push(ref st.opers, false); // false = write
+        list_push(ref st.keys, key);
+        list_push(ref st.values, val);
+        st.stor{## k} = v;
+    } else {
+        st.stor{## key} = val;
+    }
+}
+

@@ -1,0 +1,8 @@
+use Std::*;
+
+// prob_log - the absolute value of the exponent of 2 in the actual error probability
+// trustability_exponent - the absolute value of the exponent of 2 in the highest acceptable probability of false success of a single assertion
+// Computes the number of repetitions necessary to achieve error probability within acceptable bounds
+pub fn repetition_times(prob_log : uint $pre @public, trustability_exponent : uint $pre @public) -> u64 $pre @public {
+  (1 + trustability_exponent / prob_log) as u64
+}

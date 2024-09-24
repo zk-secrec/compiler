@@ -1,0 +1,203 @@
+/*
+ * Copyright 2024 Cybernetica AS
+ * 
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+use Std::*;
+use Integer::*;
+use ChrVec::*;
+use Bitextract::*;
+use Inequalities::*;
+use Store::*;
+
+
+pub type Char[N : Nat] : Unqualified = uint[N];
+
+pub struct String[$S, @D, N : Nat] {
+    chars : list[Char[N] $S @D] $pre @public,
+    len : uint[N] $S @D,
+}
+
+pub fn string_to_pre[$S, @D, N : Nat](str : String[$S, @D, N]) -> String[$pre, @D, N]
+{ String
+  { chars: uint_list_to_pre(str.chars)
+  , len: str.len as $pre
+  }
+}
+
+pub fn string_to_post[@D, N : Nat](str : String[$pre, @D, N]) -> String[$post, @D, N] where Field[N] {
+  String {
+    chars: for i in 0 .. length(str.chars) { wire { str.chars[i] } },
+    len: wire{ str.len }
+  }
+}
+
+pub fn string_to_prover[$S, @D, N : Nat](str : String[$S, @D, N]) -> String[$S, @prover, N]
+{ String
+  { chars: uint_list_to_prover(str.chars)
+  , len: str.len as @prover
+  }
+}
+
+pub fn string_assert_eq[@D, N : Nat](x : String[$post, @D, N], y : String[$post, @D, N], maxLen : u64 $pre @public) 
+  where Field[N] {
+  assert_zero(x.len - y.len);
+  let within_len = chrvec_lt(maxLen, x.len);
+  for i in 0 .. maxLen {
+    conditional_assert_zero(within_len[i], x.chars[i] - y.chars[i]);
+  };
+}
+
+pub fn string_eq[$S, @D, N : Nat](x : String[$S, @D, N], y : String[$S, @D, N], maxLen : u64 $pre @public) -> bool[N] $S @D
+  where Field[N] {
+  if (post $S) {
+    let within_len = chrvec_lt(maxLen, x.len);
+    is_zero(x.len - y.len) & all(for i in 0 .. maxLen { impli(within_len[i], is_zero(x.chars[i] - y.chars[i])) })
+  } else {
+    if (x.len == y.len) {
+      let len = min_pre(x.len as u64, maxLen as @D);
+      all_pre(for i in 0 .. len { (x.chars as @D)[i] == (y.chars as @D)[i] })
+    } else {
+      false
+    }
+  }
+}
+
+pub fn string_eq_up_to_len[N : Nat](x : String[$post, @prover, N],
+                                    y : String[$post, @prover, N],
+                                    len : uint[N] $post @prover) -> bool[N] $post @prover
+  where Field[N]
+{
+    let rec lenHit : list[bool[N] $post @prover] = for i in 0..length(x.chars) + 1 {
+        if (i == 0) { false }
+        else {
+            lenHit[i-1] | (is_zero(len + 1 - (wire { i as uint[N] }) as @prover))
+        }
+    };
+    let rec eqs : list[bool[N] $post @prover] = for i in 0..length(x.chars) + 1 {
+        if (i == 0) { true }
+        else {
+            eqs[i-1] & (lenHit[i] | is_zero(x.chars[i-1] - y.chars[i-1]))
+        }
+    };
+    eqs[length(x.chars)]
+}
+
+unchecked eff [[*],*] -> * -> * -> * -> [*,*,[*]] -> [[*],*] ! @public
+pub fn string_substring3[$S, @D, N : Nat](str : String[$S, @D, N], start : uint[N] $S @D, len : uint[N] $S @D, maxLen : u64 $pre @public, ref sizeasserter : SizeAsserter[N, $S, @D]) -> String[$S, @D, N] 
+  where Field[N], Vectorization {
+  if (post $S) {
+    if (@prover <= @D) {
+      assert_le(start + len, str.len, ref sizeasserter);
+      let n = length(str.chars);
+      let cs = append(str.chars, for i in 0 .. maxLen { -1 });
+//      let log = log2(length(cs) as uint + maxLen as uint) + 1;
+  
+      let newChars = if (true : bool $pre @public) { // if ((n + maxLen) * maxLen < 18 * (length(cs) + maxLen) * log) 
+        let mut chars : Store[N, $post, @D] = {#};
+        //let mut chars : Store[N, $post, @D] = store_new_def();
+        for i in 0 .. length(cs) {
+          let i_post = (wire { i as uint[N] }) as @D;
+          chars{#i_post} = cs[i];
+          // store_write(ref chars, i', cs[i]);
+        };
+        for i in 0 .. maxLen {
+          let i_post = (wire { i as uint[N] }) as @D;
+          chars{#(start + i_post)}
+          // store_read(ref chars, start + i')
+        } 
+      } else { segment(cs, start, maxLen) };
+  
+      String {
+        chars: newChars,
+        len: len,
+      }
+    } else { 
+      let str_pre = string_to_pre(str);
+      let substr_pre = string_substring(str_pre, start as $pre, len as $pre, maxLen);
+      string_to_post(substr_pre)
+    }
+  } else {
+    dbg_assert(start + len <= str.len);
+    String {
+      chars: for i in 0 .. maxLen {
+        if start as u64 + i as @D < length(str.chars as @D) {
+          (str.chars as @D)[start as u64 + i as @D]
+        } else {
+          -1
+        }
+      },
+      len: len
+    }
+  }
+}
+
+unchecked eff [[*],*] -> * -> * -> * -> [[*],*] ! @public
+pub fn string_substring[@D, N : Nat](str : String[$pre, @D, N], start : uint[N] $pre @D, len : uint[N] $pre @D, maxLen : u64 $pre @public) -> String[$pre, @D, N] where Field[N], Vectorization {
+//   let fbw = log2(N) as u64 - 2;
+  let mut sizeasserter : SizeAsserter[N, $pre, @D] = sizeasserter_new(0);
+  string_substring3(str, start, len, maxLen, ref sizeasserter)
+}
+
+unchecked eff [*] -> [[*],*] ! $S
+pub fn string_with_native_len[N : Nat, $S, @D](bytes : list[uint[N] $S @D]) -> String[$S, @D, N] where Field[N] {
+  String { 
+    chars : bytes, 
+    len : if (post $S) { (wire { length(bytes) as uint[N] }) as @D }
+          else { length(bytes) as uint[N] as @D }
+  }
+}
+
+// Big-endian
+pub fn eval_string[$S, @D, N : Nat](xs : String[$S, @D, N], r : uint[N] $S @D) -> uint[N] $S @D
+where Field[N]
+{ let n = length(xs.chars)
+; let chrvec = chrvec_lt(n, xs.len)
+; let rec res = for i in 0 .. n + 1
+  { if (i == 0) { 0 }
+    else { uint_cond(chrvec[i - 1], res[i - 1] * r + xs.chars[i - 1], res[i - 1]) }
+  }
+; res[n]
+}
+
+// Constraint: l <= length(s.chars)
+pub fn string_to_uint[N : Nat, $S, @D](s : String[$S, @D, N], l : u64 $pre @public) -> uint[N] $S @D 
+  where Field[N] {
+  let zeroPadded : list[uint[N] $S @D] = if (post $S) {
+    let within_len = chrvec_lt(l, s.len);
+    for i in 0 .. l { within_len[i] as uint[N] * s.chars[i] }
+  } else { for i in 0 .. l {
+      if (i as uint as @D < s.len as uint) { s.chars[i] } else { 0 }
+    }
+  };
+  let bytes : list[list[bool[N] $S @D]] = for i in 0 .. l {
+    bitextract(zeroPadded[i], 8)
+  };
+  // concat reversed bytes
+  let rBytes : list[list[bool[N] $S @D]] = for i in 0 .. length(bytes) { 
+    bytes[length(bytes) - 1 - i]
+  };
+  let bits : list[bool[N] $S @D] = concat(rBytes);
+  // binary -> int
+  bits_to_uint(bits)
+}
+
+pub fn uint_to_string[N : Nat, $S, @D](x : uint[N] $S @D, maxlen : u64 $pre @public) -> String[$S, @D, N] 
+    where Field[N] {
+    let bits : list[bool[N] $S @D] = bitextract(x, maxlen * 8);
+    let bytes : list[list[bool[N] $S @D]] = group(bits, 8);
+    let ints : list[uint[N] $S @D] = bytes_to_uints(bytes);
+    let rec inds = for i in 0 .. maxlen {
+      if (i == 0) { is_zero(ints[i]) as uint[N] }
+      else { inds[i - 1] * is_zero(ints[i]) as uint[N] }
+    };
+    String {
+        chars: reverse(ints),
+        len: uint_downcast(maxlen as uint[N]) as @D - sum(inds)
+    }
+}

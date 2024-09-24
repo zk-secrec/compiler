@@ -1,0 +1,17 @@
+version 2.1.0;
+configuration;
+
+// ZKSC currently does not support other plugins
+@plugin iter_v0;
+@plugin disjunction_v0;
+@plugin permutation_check_v1;
+@plugin extended_arithmetic_v1;
+@plugin vectors_v1;
+
+// ZKSC currently does not support extension fields or rings
+@type field(greater_than(1));
+
+// ZKSC currently supports challenges
+@challenge(0);
+
+@convert(@out: 0, @in: 0);

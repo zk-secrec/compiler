@@ -1,0 +1,194 @@
+use Std::*;
+use Integer::*;
+use Inequalities::*;
+use Char::*;
+use String::*;
+
+pub struct Date[$S, @D, N : Nat] 
+{ year : uint[N] $S @D
+, month : uint[N] $S @D
+, day : uint[N] $S @D
+, code : uint[N] $S @D
+}
+
+pub fn date[$S, @D, N : Nat]
+( year : uint[N] $S @D
+, month : uint[N] $S @D
+, day : uint[N] $S @D
+) -> Date[$S, @D, N] 
+{ Date
+  { year : year
+  , month : month
+  , day : day
+  , code : (year * 16 + month) * 32 + day
+  }
+}
+
+pub fn date_assert_eq[@D, N : Nat]
+( x : Date[$post, @D, N]
+, y : Date[$post, @D, N]
+)
+where Field[N]
+{ assert_zero(x.code - y.code)
+}
+
+pub fn is_full_date[$S, @D, N : Nat](str : String[$S, @D, N]) -> bool[N] $S @D
+where Field[N]
+{ let bs = for i in 0 .. min_pre(length(str.chars), 10)
+  { let chr = str.chars[i]
+  ; if (i == 4 | i == 7) { eq(chr, 45) } else { is_digit_chr(chr) }
+  }
+; eq(str.len, 10) & all(bs)
+}
+
+// Not quite YYYY-MM-DD, because 0 is not added in front of month and day
+pub fn date_to_string[@D, N : Nat](date : Date[$pre, @D, N]) -> string $pre @D
+{ to_string(date.year) ++ ("-" ++ (to_string(date.month) ++ ("-" ++ to_string(date.day))))
+}
+   
+// Assumes that the input is a correct full date expressed as a string
+pub fn parse_full_date[$S, @D, N : Nat](full_date : String[$S, @D, N]) -> Date[$S, @D, N]
+{ let rec ys = for i in 0 .. 5
+  { if (i == 0) { 0 }
+    else { ys[i - 1] * 10 + (full_date.chars[i - 1] - 48) }
+  }
+; let rec ms = for i in 0 .. 3
+  { if (i == 0) { 0 }
+    else { ms[i - 1] * 10 + (full_date.chars[i + 4] - 48) }
+  }
+; let rec ds = for i in 0 .. 3
+  { if (i == 0) { 0 }
+    else { ds[i - 1] * 10 + (full_date.chars[i + 7] - 48) }
+  }
+; date(ys[4], ms[2], ds[2])
+}
+
+pub fn date_eq[$S, @D, N : Nat]
+( xd : Date[$S, @D, N]
+, yd : Date[$S, @D, N]
+) -> bool[N] $S @D 
+where Field[N] 
+{ eq(xd.code, yd.code)
+}
+
+pub fn date_sizeasserter_new[N : Nat, $S, @D]() -> SizeAsserter[N, $S, @D] 
+where Field[N] 
+{ sizeasserter_new(23)
+}
+
+// Assumes that xd and yd are correct dates
+pub fn date_assert_le[N : Nat]
+( xd : Date[$post, @prover, N]
+, yd : Date[$post, @prover, N]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) where Field[N] 
+{ let trash = check_size(yd.code - xd.code, ref sizeasserter)
+;
+}
+
+// Assumes that xd and yd are correct dates
+pub fn date_assert_ge[N : Nat]
+( xd : Date[$post, @prover, N]
+, yd : Date[$post, @prover, N]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) 
+where Field[N] 
+{ let trash = check_size(xd.code - yd.code, ref sizeasserter)
+;
+}
+
+pub fn date_assert_lt[N : Nat]
+( xd : Date[$post, @prover, N]
+, yd : Date[$post, @prover, N]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) 
+where Field[N] 
+{ let trash = check_size(yd.code - xd.code - 1, ref sizeasserter)
+;
+}
+
+// Assumes that xd and yd are correct dates
+pub fn date_assert_gt[N : Nat]
+( xd : Date[$post, @prover, N]
+, yd : Date[$post, @prover, N]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) 
+where Field[N] 
+{ let trash = check_size(xd.code - yd.code - 1, ref sizeasserter)
+;
+}
+
+// Assumes that xd and yd are correct dates
+pub fn date_le3[N : Nat]
+( xd : Date[$post, @prover, N]
+, yd : Date[$post, @prover, N]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) -> bool[N] $post @prover 
+where Field[N] 
+{ le3'(Checked { val: xd.code }, Checked { val: yd.code }, ref sizeasserter)
+}
+
+// Assumes that xd and yd are correct dates
+pub fn date_ge3[N : Nat]
+( xd : Date[$post, @prover, N]
+, yd : Date[$post, @prover, N]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) -> bool[N] $post @prover 
+where Field[N] 
+{ ge3'(Checked { val: xd.code }, Checked { val: yd.code }, ref sizeasserter)
+}
+
+// Assumes that xd and yd are correct dates
+pub fn date_lt3[N : Nat]
+( xd : Date[$post, @prover, N]
+, yd : Date[$post, @prover, N]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) -> bool[N] $post @prover 
+where Field[N] 
+{ lt3'(Checked { val: xd.code }, Checked { val: yd.code }, ref sizeasserter)
+}
+
+// Assumes that xd and yd are correct dates
+pub fn date_gt3[N : Nat]
+( xd : Date[$post, @prover, N]
+, yd : Date[$post, @prover, N]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) -> bool[N] $post @prover 
+where Field[N] 
+{ gt3'(Checked { val: xd.code }, Checked { val: yd.code }, ref sizeasserter)
+}
+
+pub fn date_to_prover[$S, @D, N : Nat]
+( d : Date[$S, @D, N]
+) -> Date[$S, @prover, N] 
+{ Date 
+  { year : d.year as @prover
+  , month : d.month as @prover
+  , day : d.day as @prover
+  , code : d.code as @prover
+  }
+}
+
+pub fn date_to_post[@D, N : Nat]
+( d : Date[$pre, @D, N]
+) -> Date[$post, @D, N] 
+where Field[N]
+{ Date 
+  { year : wire { d.year }
+  , month : wire { d.month }
+  , day : wire { d.day }
+  , code : wire { d.code } 
+  }
+}
+
+pub fn date_to_pre[@D, N : Nat]
+( d : Date[$post, @D, N]
+) -> Date[$pre, @D, N]
+where Field[N]
+{ Date
+  { year : d.year as $pre
+  , month : d.month as $pre
+  , day : d.day as $pre
+  , code : d.code as $pre
+  }
+}

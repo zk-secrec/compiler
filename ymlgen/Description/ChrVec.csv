@@ -1,0 +1,6 @@
+"check_chrvec","Assertion that the argument list is a characteristic vector, i.e., contains exactly one true value. Assumes that the length of the list is less than the modulus."
+"chrvec","The characteristic vector of the natural number given as the second argument, having length given as the first argument. If the second argument is not less than the first argument then the result consists of falses only."
+"chrvec_list_pre","The characteristic vector of the given list of indices in `$pre`, having length given as the first argument. Fails if the given list contains any number not less than the first argument."
+"chrvec_lt","The characteristic vector of being less than the natural number given as the second argument, having length given as the first argument."
+"segment","A segment of the list given as the first argument, starting from the index given as the second argument and having length given as the third argument. Fails if the segment would extend beyond the end of the given list."
+"element","The element of the list given as the first argument located at the position given as the second argument. Fails if the position is out of bounds of the list."

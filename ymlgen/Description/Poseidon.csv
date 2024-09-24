@@ -1,0 +1,5 @@
+"poseidon_perm","Applying the Poseidon permutation with parameters given as the second and third arguments to the state given as the first argument."
+"poseidon","Hashing the data given as the first argument with Poseidon instance with parameters given as the other arguments."
+"poseidon_initialize","A new PoseidonInstance object with the given parameters. Fails if the parameters do not satisfy two conditions assumed about Poseidon instances (`r` < `t`, `R_F` is even)."
+"poseidon_continue","Absorbing new data given as the second argument into the PoseidonInstance object given as the first argument. Fails if the length of the data list is not a multiple of the parameter r of the PoseidonSpongeParams object (in the `sponge_params` field of the PoseidonInstance object)."
+"poseidon_finalize","Final output of the given PoseidonInstance object, assuming that it has absorbed all necessary data."

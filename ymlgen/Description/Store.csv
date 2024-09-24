@@ -1,0 +1,6 @@
+"set_store_default","Setting if the given `$pre` store uses a default value when looking up a missing key or not (if set to false, a failure occurs in such case)."
+"store_new","A new empty store with given parameters: `writeOnce` being true means that the value for every key is set at most once; `contiguous` being true means that the used keys are consecutive; `def` being true means that a default value is returned if a missing key is looked up. It is up to the programmer that the conditions assumed by `writeOnce` and `contiguous` be valid."
+"store_new_nodef","A new empty store with no writing once or contiguity assumptions and not using a default value."
+"store_new_def","A new empty store with no writing once or contiguity assumptions and using a default value."
+"store_write","Setting the value given as the third argument to correspond to the key given as the second argument in the store given as the first argument."
+"store_read","Getting the value that corresponds to the key given as the second argument in the store given as the first argument."

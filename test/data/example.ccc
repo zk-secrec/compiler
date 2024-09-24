@@ -1,0 +1,70 @@
+version 2.0.0;
+configuration;
+
+// The following plugins may be used
+@plugin mux_v0;
+@plugin ram_arith_v0;
+@plugin ram_arith_v1;
+
+// 0: The field of exactly 2
+@type field(equals(2));
+
+// 1: Any prime greater than 1 million
+@type field(greater_than(1000000));
+
+// 2: Any mersenne prime which is greater than 100 and less than 1000.
+// To avoid confusion, for a Mersenne Prime p such that p = 2**m - 1,
+// 100 < p < 1000, rather than m.
+@type field(is_mersenne, greater_than(100), less_than(1000));
+
+// 3: An extension field over GF(2**4)
+@type ext_field (0) (equals(4)) ();
+
+// 4: A 16, 32, or 64-bit unsighed integer
+@type ring(is_power_of_2, less_than(65), greater_than(15));
+
+// 5, 6: RAM Types for either the v0 or v1 RAM plugin
+@type @plugin ram_arith_v0;
+@type @plugin ram_arith_v1;
+
+@challenge(0);
+@challenge(1);
+
+// Conversion from large fields (type 1) to Booleans (type 0)
+@convert(@out: 0, @in: 1);
+
+// Conversion from large primes (type 1) to Mersennes (type 2)
+@convert(@out: 2, @in: 1);
+
+// Conversions from the extension field (type 3) to Booleans (type 0)
+// Note, that the IR only defines conversions involving extension
+// fields to or from their base fields
+@convert(@out: 0, @in: 3);
+
+// Bidirectional conversions of fields (type 1) and rings (type 4)
+@convert(@out: 4, @in: 1);
+@convert(@out: 1, @in: 4);
+
+// Note that different versions of the same plugin are 
+// unlikely to be compatible
+@convert(@out:5, @in: 6);
+
+// Note that although constraints are shown for the vectors_v1 
+// plugin, they are shown for demonstration purpose and are not 
+// standardized. Frontends are unlikely to recognize these
+// constraints.
+
+@plugin_constraints(vectors_v1)
+  // Element type must match either of the first to @field lines
+
+  // The plugin spec defines the meaning of reprated element_type
+  // constraints; in this case, we assume repeated lines are 
+  // allowed and that the constraint is satisfied if at least one 
+  // line is satisfied.
+  @constraint(element_type, 0);
+  @constraint(element_type, 1);
+
+  // Vector width must be a power of two between 2 and 16. The
+  // meaning of these constraints is defined by the plugin spec.
+  @constraint(vector_width, is_power_of_2, 2, 16);
+@end

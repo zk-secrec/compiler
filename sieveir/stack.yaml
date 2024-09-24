@@ -1,0 +1,7 @@
+resolver: lts-18.24
+
+packages:
+  - '.'
+
+extra-deps:
+  - flatbuffers-0.3.0.0

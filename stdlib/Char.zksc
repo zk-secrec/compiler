@@ -1,0 +1,9 @@
+use Integer::*;
+
+pub fn is_digit_chr[N : Nat, $S, @D](chr : uint[N] $S @D) -> bool[N] $S @D
+where Field[N]
+{ eq(chr, 48) | eq(chr, 49) | eq(chr, 50) | eq(chr, 51) | eq(chr, 52) |
+  eq(chr, 53) | eq(chr, 54) | eq(chr, 55) | eq(chr, 56) | eq(chr, 57)
+// le(48, chr, 8) & lt(chr, 58, 8) // is more inefficient
+}
+ 

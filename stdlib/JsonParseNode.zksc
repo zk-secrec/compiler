@@ -1,0 +1,71 @@
+/*
+ * Copyright 2024 Cybernetica AS
+ * 
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+pub struct ParseNode[N : Nat] {
+  rawStart:       uint[N] $post @prover,
+  //rawStart_bits:  list[bool[N] $post @prover],
+  rawEnd:         uint[N] $post @prover,
+  //rawEnd_bits:    list[bool[N] $post @prover],
+  charStart:      uint[N] $post @prover,
+  //charStart_bits: list[bool[N] $post @prover],
+  charEnd:        uint[N] $post @prover,
+  //charEnd_bits:   list[bool[N] $post @prover],
+  jsonStart:      uint[N] $post @prover,
+  jsonStart_bits: list[bool[N] $post @prover],
+  jsonEnd:        uint[N] $post @prover,
+  jsonEnd_bits:   list[bool[N] $post @prover],
+  rule:           uint[N] $post @prover,
+  //rule_bits:      list[bool[N] $post @prover],
+  numValue:       uint[N] $post @prover,
+  //numValue_bits:  list[bool[N] $post @prover],
+  up:             uint[N] $post @prover,
+  up_bits:        list[bool[N] $post @prover],
+}
+
+pub fn ParseNode_to_string[N : Nat](x : ParseNode[N]) -> string $pre @prover {
+    string_append(
+        "ParseNode {\n  rawStart: ",
+    string_append(
+        to_string(x.rawStart as $pre),
+    string_append(
+        "\n  rawEnd: ",
+    string_append(
+        to_string(x.rawEnd as $pre),
+    string_append(
+        "\n  charStart: ",
+    string_append(
+        to_string(x.charStart as $pre),
+    string_append(
+        "\n  charEnd: ",
+    string_append(
+        to_string(x.charEnd as $pre),
+    string_append(
+        "\n  jsonStart: ",
+    string_append(
+        to_string(x.jsonStart as $pre),
+    string_append(
+        "\n  jsonEnd: ",
+    string_append(
+        to_string(x.jsonEnd as $pre),
+    string_append(
+        "\n  rule: ",
+    string_append(
+        to_string(x.rule as $pre),
+    string_append(
+        "\n  numValue: ",
+    string_append(
+        to_string(x.numValue as $pre),
+    string_append(
+        "\n  up: ",
+    string_append(
+        to_string(x.up as $pre),
+        "\n}"
+    ))))))))))))))))))
+}

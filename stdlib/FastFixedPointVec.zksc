@@ -1,0 +1,532 @@
+/*
+The module contains vectorized operations on vectors of fixed-point numbers.
+These vectors are represented as struct FixedVec, which contains
+* coefs: the coefficients of all elements as an integer vector,
+* len: the total number of bits in each element (the same for all elements),
+* pplen: the number of bits after the point (the same for all elements).
+
+Some of the functions use fixed-point scalars in addition to vectors,
+these scalars are struct Fixed, taken from FastFixedPoint.zksc and not FixedPoint.zksc.
+The version of struct Fixed in FixedPoint.zksc uses SizeAsserters, which are not compatible with this module.
+
+The function names use a similar naming convention as used in Vec.zksc.
+The following suffixes are used to denote argument types:
+    _uv       integer vector (arr[uint[N] $post @prover] or UIntVec[N])
+    _uint     integer scalar (uint[N] $post @prover)
+    _fv       fixed-point vector (FixedVec[N])
+    _fixed    fixed-point scalar (Fixed[N, $post, @prover])
+    _prefixed fixed-point constant (Fixed[N, $pre, @public])
+
+Normally, the functions will return a fixed-point vector or scalar with the same len and pplen as the arguments,
+rounding to pplen bits after the point if necessary and checking for fitting into len bits.
+
+The functions which have a suffix _exact do not do the rounding and instead increase len and/or pplen to fit the result.
+This makes those functions much faster than the corresponding function without the _exact suffix.
+
+The functions with the suffix _unchecked do not check for fitting into len bits. This check can be added by applying
+checked_fv to the result of the _unchecked function. Sometimes it is possible to make several _unchecked operations in a row
+before calling the expensive checked_fv, as long as the intermediate results do not overflow the modulus (but they do not have to fit into
+len bits). For example, 3 fixed-point vectors can be added together by
+    checked_fv(add_fv_unchecked(xs, add_fv_unchecked(ys, zs)))
+calling checked_fv only once rather than twice. This is safe if 3*(2^len - 1) < N.
+
+Creating fixed-point vectors:
+    empty_fv                    an empty vector
+    slice_fv                    a slice of another vector
+    fv_unchecked                create a vector without checking for fitting in len bits
+    fv_checked                  create a vector, checking for fitting in len bits
+    uv_to_fv_unchecked          convert an integer vector into a fixed-point vector (unchecked)
+ 
+Functions returning a fixed-point vector:
+    add_fv                      adding two vectors elementwise, checked, very slow
+    add_fv_exact                adding two vectors elementwise, increases len by 1 to guarantee fitting, very fast
+    add_fv_unchecked            adding two vectors elementwise, unchecked, very fast
+    add_fixed_fv_unchecked      adding a scalar to all elements of a vector
+    add_prefixed_fv_unchecked   adding a constant to all elements of a vector
+    negate_fv                   negating (multiplying by -1) the elements of a vector
+    sub_fv                      subtracting two vectors elementwise, checked, very slow
+    sub_fv_unchecked            subtracting two vectors elementwise, unchecked, very fast
+    mul_fv                      multiplying two vectors elementwise, rounding, slow
+    mul_fv_exact                multiplying two vectors elementwise, fast, len and pplen of the result are the sum of len and pplen of arguments, respectively
+    mul_fixed_fv_exact          multiplying all elements of a vector by a scalar, no rounding, fast
+    mul_prefixed_fv_exact       multiplying all elements of a vector by a constant, no rounding, fast
+    mul_fixed_uv_unchecked      multiplying all elements of an integer vector by a fixed-point scalar, unchecked, fast
+    mul_uint_fv_unchecked       multiplying all elements of a fixed-point vector by an integer scalar, unchecked, fast
+    mul_uv_fv_unchecked         multiplying an integer vector and a fixed-point vector elementwise, unchecked, fast
+    div_fv                      dividing two vectors elementwise
+    div_fixed_fv                dividing a scalar by each element of a vector
+    sqrt_fv                     taking a square root of all elements of a vector
+    max_fv                      elementwise maximum of two vectors
+    max_fixed_fv                ith element of output is the maximum of the scalar and the ith element of input
+    min_fv                      elementwise minimum of two vectors
+    min_fixed_fv                ith element of output is the minimum of the scalar and the ith element of input
+
+Functions returning a scalar:
+    sum_fv_unchecked            sum of the elements of a vector
+    scalar_prod_uv_fv_unchecked scalar product (dot product) of an integer vector and a fixed-point vector
+
+Functions returning a vector whose elements are 0 or 1:
+    ge_fv_fixed                 xs[i] >= y
+    le_fv_fixed                 xs[i] <= y
+
+Other functions:
+    checked_fv                  return the same vector after checking for fitting in len bits
+    make_unknown_fv             remove values from the wire range, to make circuit generation faster if the values are no longer needed in $pre
+    thaw_fv                     convert a fixed-point vector to a list of fixed-point scalars (list[Fixed[N, $post, @prover]])
+
+Changing len and/or pplen, returning a new fixed-point vector with values (approximately) equal to the input vector:
+    increase_pplen_fv           increase pplen to a given value and increase len to keep len-pplen the same as before
+    decrease_len_fv_unchecked   decreases len but does not check for fitting into the new len bits
+    round_down_fv               decreases pplen by rounding down (towards minus infinity) some of the final bits
+    round_down_fv_to_half       rounds down half of the bits after the point, can be used after mul_fv_exact to get back to the original len and pplen
+    round_down_fv_to_int        rounds down to integer (floor)
+    round_down_fv_unchecked     unchecked version of round_down_fv, about twice as fast
+*/
+
+use Integer::*;
+use FastFixedPoint::*;
+use Vec::*;
+use Std::*;
+
+pub struct FixedVec[N : Nat] {
+    coefs : UIntVec[N],
+    len : u64 $pre @public,
+    pplen : u64 $pre @public
+}
+
+pub fn empty_fv[N : Nat]() -> FixedVec[N] where Vectorization {
+    FixedVec { coefs : freeze([]), len : 0, pplen : 0 }
+}
+
+pub fn thaw_fv[N : Nat](xv : FixedVec[N]) -> list[Fixed[N, $post, @prover]] {
+    for i in 0 .. length(xv.coefs) {
+        Fixed {
+            coef : xv.coefs[i],
+            len : xv.len,
+            pplen : xv.pplen
+        }
+    }
+}
+
+pub fn make_unknown_fv[N : Nat](xv : FixedVec[N]) -> FixedVec[N] {
+    FixedVec {
+        coefs : make_unknown(xv.coefs),
+        len : xv.len,
+        pplen : xv.pplen,
+    }
+}
+
+pub fn slice_fv[N : Nat](xv : FixedVec[N], i1 : u64 $pre @public, i2 : u64 $pre @public) -> FixedVec[N] {
+    FixedVec {
+        coefs : xv.coefs[i1 .. i2],
+        len : xv.len,
+        pplen : xv.pplen,
+    }
+}
+
+pub fn fv_unchecked[N : Nat](coefs : UIntVec[N], len : u64 $pre @public, pplen : u64 $pre @public) -> FixedVec[N] {
+    FixedVec {
+        coefs : coefs,
+        len : len,
+        pplen : pplen
+    }
+}
+
+pub fn fv_checked[N : Nat](coefs : UIntVec[N], len : u64 $pre @public, pplen : u64 $pre @public) -> FixedVec[N] where Field[N], Vectorization {
+    checked_fv(fv_unchecked(coefs, len, pplen))
+}
+
+pub fn uv_to_fv_unchecked[N : Nat](xs : UIntVec[N], len : u64 $pre @public, pplen : u64 $pre @public) -> FixedVec[N] where Field[N], Vectorization {
+    let pow2 = pow_pre(2 : uint[N] $pre @public, pplen);
+    FixedVec {
+        coefs : mul_preuint_uv(pow2, xs),
+        len : len,
+        pplen : pplen
+    }
+}
+
+pub fn check_fv[N : Nat](xv : FixedVec[N]) where Field[N], Vectorization {
+    let pow2 = pow_pre(2 : uint[N] $pre @public, xv.len-1);
+    let to_check = add_preuint_uv(pow2, xv.coefs);
+    let trash = bitextract_uv(to_check, xv.len);
+}
+
+pub fn checked_fv[N : Nat](xv : FixedVec[N]) -> FixedVec[N] where Field[N], Vectorization {
+    check_fv(xv);
+    xv
+}
+
+pub fn negate_fv[N : Nat](xv : FixedVec[N]) -> FixedVec[N] where Field[N], Vectorization {
+    FixedVec {
+        coefs : mul_preuint_uv(-1, xv.coefs),
+        len : xv.len,
+        pplen : xv.pplen,
+    }
+}
+
+pub fn add_fv_unchecked[N : Nat](xv : FixedVec[N], yv : FixedVec[N]) -> FixedVec[N] where Vectorization {
+    dbg_assert(xv.len == yv.len & xv.pplen == yv.pplen);
+    FixedVec {
+        coefs : xv.coefs +. yv.coefs,
+        len : xv.len,
+        pplen : xv.pplen,
+    }
+}
+
+pub fn add_fv[N : Nat](xv : FixedVec[N], yv : FixedVec[N]) -> FixedVec[N] where Field[N], Vectorization {
+    checked_fv(add_fv_unchecked(xv, yv))
+}
+
+pub fn add_fv_exact[N : Nat](xv : FixedVec[N], yv : FixedVec[N]) -> FixedVec[N] where Vectorization {
+    dbg_assert(xv.len == yv.len & xv.pplen == yv.pplen);
+    FixedVec {
+        coefs : xv.coefs +. yv.coefs,
+        len : xv.len + 1,
+        pplen : xv.pplen,
+    }
+}
+
+pub fn sub_fv_unchecked[N : Nat](xv : FixedVec[N], yv : FixedVec[N]) -> FixedVec[N] where Field[N], Vectorization {
+    add_fv_unchecked(xv, negate_fv(yv))
+}
+
+pub fn sub_fv[N : Nat](xv : FixedVec[N], yv : FixedVec[N]) -> FixedVec[N] where Field[N], Vectorization {
+    checked_fv(sub_fv_unchecked(xv, yv))
+}
+
+pub fn add_fixed_fv_unchecked[N : Nat](x : Fixed[N, $post, @prover], xv : FixedVec[N]) -> FixedVec[N] where Vectorization {
+    dbg_assert(x.len == xv.len & x.pplen == xv.pplen);
+    FixedVec {
+        coefs : add_uint_uv(x.coef, xv.coefs),
+        len : x.len,
+        pplen : x.pplen
+    }
+}
+
+pub fn add_prefixed_fv_unchecked[N : Nat](x : Fixed[N, $pre, @public], xv : FixedVec[N]) -> FixedVec[N] where Field[N], Vectorization {
+    dbg_assert(x.len == xv.len & x.pplen == xv.pplen);
+    FixedVec {
+        coefs : add_preuint_uv(x.coef, xv.coefs),
+        len : x.len,
+        pplen : x.pplen
+    }
+}
+
+pub fn mul_fv_exact[N : Nat](xv : FixedVec[N], yv : FixedVec[N]) -> FixedVec[N] where Vectorization {
+    let new_len = xv.len + yv.len;
+    dbg_assert(pow_pre_inf(2 : uint $pre @public, new_len) < N);
+    FixedVec {
+        coefs : xv.coefs *. yv.coefs,
+        len : new_len,
+        pplen : xv.pplen + yv.pplen
+    }
+}
+
+pub fn mul_fv[N : Nat](xv : FixedVec[N], yv : FixedVec[N]) -> FixedVec[N]
+  where Field[N], Vectorization {
+    round_down_fv_to_half(mul_fv_exact(xv, yv))
+}
+
+pub fn mul_fixed_fv_exact[N : Nat](x : Fixed[N, $post, @prover], yv : FixedVec[N]) -> FixedVec[N] where Vectorization {
+    let new_len = x.len + yv.len;
+    dbg_assert(pow_pre_inf(2 : uint $pre @public, new_len) < N);
+    FixedVec {
+        coefs : mul_uint_uv(x.coef, yv.coefs),
+        len : new_len,
+        pplen : x.pplen + yv.pplen
+    }
+}
+
+pub fn mul_prefixed_fv_exact[N : Nat](x : Fixed[N, $pre, @public], yv : FixedVec[N]) -> FixedVec[N] where Field[N], Vectorization {
+    let new_len = x.len + yv.len;
+    dbg_assert(pow_pre_inf(2 : uint $pre @public, new_len) < N);
+    FixedVec {
+        coefs : mul_preuint_uv(x.coef, yv.coefs),
+        len : new_len,
+        pplen : x.pplen + yv.pplen
+    }
+}
+
+pub fn mul_fixed_uv_unchecked[N : Nat](x : Fixed[N, $post, @prover], xs : UIntVec[N]) -> FixedVec[N] where Vectorization {
+    FixedVec {
+        coefs : mul_uint_uv(x.coef, xs),
+        len : x.len,
+        pplen : x.pplen
+    }
+}
+
+pub fn mul_uint_fv_unchecked[N : Nat](x : uint[N] $post @prover, yv : FixedVec[N]) -> FixedVec[N] where Vectorization {
+    FixedVec {
+        coefs : mul_uint_uv(x, yv.coefs),
+        len : yv.len,
+        pplen : yv.pplen
+    }
+}
+
+pub fn mul_uv_fv_unchecked[N : Nat](xs : UIntVec[N], yv : FixedVec[N]) -> FixedVec[N] where Vectorization {
+    FixedVec {
+        coefs : xs *. yv.coefs,
+        len : yv.len,
+        pplen : yv.pplen
+    }
+}
+
+// len and pplen are increased by the same amount
+pub fn increase_pplen_fv[N : Nat](xv : FixedVec[N], new_pplen : u64 $pre @public) -> FixedVec[N] where Field[N], Vectorization {
+    dbg_assert(new_pplen >= xv.pplen);
+    let n = new_pplen - xv.pplen;
+    let pow2 = pow_pre(2 : uint[N] $pre @public, n);
+    FixedVec {
+        coefs : mul_preuint_uv(pow2, xv.coefs),
+        len : xv.len + n,
+        pplen : new_pplen
+    }
+}
+
+pub fn decrease_len_fv_unchecked[N : Nat](xv : FixedVec[N], new_len : u64 $pre @public) -> FixedVec[N] {
+    dbg_assert(new_len < xv.len);
+    FixedVec {
+        coefs : xv.coefs,
+        len : new_len,
+        pplen : xv.pplen
+    }
+}
+
+pub fn round_down_fv_unchecked[N : Nat](xv : FixedVec[N], new_len : u64 $pre @public, new_pplen : u64 $pre @public) -> FixedVec[N]
+  where Field[N], Vectorization {
+    let pplen = xv.pplen;
+    let num_bits_to_round = pplen - new_pplen;
+    dbg_assert(pplen >= new_pplen);
+    let rounding_factor_pre_public = pow_pre_inf(2 : uint $pre @public, num_bits_to_round);
+    let rounding_factor_pre_prover = rounding_factor_pre_public as @prover;
+    let rounding_factor_uintN = rounding_factor_pre_public as uint[N];
+    let new_coefs_pre =
+        freeze(
+            for i in 0 .. length(xv.coefs) {
+                (signed_uintN_to_uint(xv.coefs[i] as $pre) / rounding_factor_pre_prover) as uint[N]
+            });
+    let new_coefs : UIntVec[N] = array_to_post(new_coefs_pre);
+    dbg_assert(pow_pre_inf(2 : uint $pre @public, num_bits_to_round + new_len) < N); // check that mul_preuint_uv(rounding_factor_uintN, new_coefs) cannot overflow the modulus
+    let to_check = xv.coefs -. mul_preuint_uv(rounding_factor_uintN, new_coefs);
+    let trash = bitextract_uv(to_check, num_bits_to_round);
+    FixedVec {
+        coefs : new_coefs,
+        len : new_len,
+        pplen : new_pplen
+    }
+}
+
+pub fn round_down_fv[N : Nat](xv : FixedVec[N], new_len : u64 $pre @public, new_pplen : u64 $pre @public) -> FixedVec[N]
+  where Field[N], Vectorization {
+    checked_fv(round_down_fv_unchecked(xv, new_len, new_pplen))
+}
+
+// can be used after mul_fv_exact to get back to the original len and pplen
+pub fn round_down_fv_to_half[N : Nat](xv : FixedVec[N]) -> FixedVec[N]
+  where Field[N], Vectorization {
+    let new_len = xv.len / 2;
+    let new_pplen = xv.pplen / 2;
+    dbg_assert(xv.len == 2 * new_len);
+    dbg_assert(xv.pplen == 2 * new_pplen);
+    round_down_fv(xv, new_len, new_pplen)
+}
+
+pub fn round_down_fv_to_int[N : Nat](xv : FixedVec[N]) -> UIntVec[N]
+  where Field[N], Vectorization {
+    let yv = round_down_fv(xv, xv.len - xv.pplen, 0);
+    yv.coefs
+}
+
+fn check_fit_unsigned_uv[N : Nat](coefs : UIntVec[N], len : u64 $pre @public) where Field[N], Vectorization {
+    let trash = bitextract_uv(coefs, len);
+}
+
+// Assumes that N is prime
+fn check_coef_div_fv[N : Nat](x : UIntVec[N], y : UIntVec[N], z : UIntVec[N], len : u64 $pre @public, pplen : u64 $pre @public) 
+  where Field[N], Vectorization {
+    // check (4) which shows that 2^k * a - b*c < b
+    // to compare t := 2^k * a - b*c and b, i check if
+    // b - t remains in len (negative values are large numbers in the 2^{len+1} field)s
+    // if t > b, then it would not fit for that reason.
+    // however in order to do so, i must first check that t > 0 (fits in len)
+    // otherwise subtracting a very large number from b (eg -1) 
+    let kk : uint[N] $pre @public = pow_pre(2,pplen);
+    let t = sub_uv(mul_preuint_uv(kk, x), y *. z);
+    check_fit_unsigned_uv(t, len);
+    assert_lt_uv(t, y, len);
+}
+
+fn coef_div_fv[N : Nat](x : UIntVec[N], y : UIntVec[N], len : u64 $pre @public, pplen : u64 $pre @public) -> UIntVec[N]
+  where Field[N], Vectorization {
+    let res_coefs =
+        for i in 0 .. length(x) {
+            coef_div_pre(x[i] as $pre, y[i] as $pre, pplen)
+        };
+    array_to_post(freeze(res_coefs))
+}
+
+pub fn div_fv[N : Nat](xv : FixedVec[N], yv : FixedVec[N]) -> FixedVec[N] where Field[N], Vectorization {
+    dbg_assert(xv.len == yv.len & xv.pplen == yv.pplen);
+    let new_len = xv.len;
+    let new_pplen = xv.pplen;
+
+    // check (5) which shows that y != 0
+    // No $post check needed, since check_coef_div covers it with assert_lt(t,y,len) and check_fit_unsigned(t,len).
+    for i in 0 .. length(yv.coefs) {
+        dbg_assert(yv.coefs[i] as $pre != 0);
+    }
+
+    // if y is negative, we multiply both x and y by (-1), which does not change the result
+    // but ensures that t in check_coef_div will be nonnegative;
+    // A malicious prover can change the bit is_negative but this will cause
+    // the check_bit_unsigned(t,len) in check_coef_div to fail because t is negative,
+    // unless t == 0 in which case it does not affect the result because there is no rounding.
+    // assert_lt(t, y, len) in check_coef_div also requires t and y to be nonnegative.
+    // In the extreme case, x may become 2^(len-1), which does not fit into signed len-bit integer
+    // but this should not be a problem as temporary values still fit into uint[N].
+    let multiplier : UIntVec[N] =
+        array_to_post(
+            freeze(
+                for i in 0 .. length(yv.coefs) {
+                    if (signed_uintN_to_uint(yv.coefs[i] as $pre) < 0) { -1 } else { 1 }
+                }));
+    // check that multiplier is -1 or 1
+    let t2 : UIntVec[N] = multiplier *. multiplier;
+    let t3 : UIntVec[N] = add_preuint_uv(-1, t2);
+    let trash : arr[() $pre @public] = assert_zero.(t3);
+
+    let new_coef = coef_div_fv(xv.coefs *. multiplier, yv.coefs *. multiplier, new_len, new_pplen);
+
+    // check (3) that -2^(n-1) <= c < 2^(n-1)
+    fv_checked(new_coef, new_len, new_pplen)
+}
+
+pub fn div_fixed_fv[N : Nat](x : Fixed[N, $post, @prover], yv : FixedVec[N]) -> FixedVec[N] where Field[N], Vectorization {
+    dbg_assert(x.len == yv.len & x.pplen == yv.pplen);
+    let new_len = x.len;
+    let new_pplen = x.pplen;
+
+    for i in 0 .. length(yv.coefs) {
+        dbg_assert(yv.coefs[i] as $pre != 0);
+    }
+
+    let multiplier : UIntVec[N] =
+        array_to_post(
+            freeze(
+                for i in 0 .. length(yv.coefs) {
+                    if (signed_uintN_to_uint(yv.coefs[i] as $pre) < 0) { -1 } else { 1 }
+                }));
+    let t2 : UIntVec[N] = multiplier *. multiplier;
+    let t3 : UIntVec[N] = add_preuint_uv(-1, t2);
+    let trash : arr[() $pre @public] = assert_zero.(t3);
+
+    let new_coef = coef_div_fv(mul_uint_uv(x.coef, multiplier), yv.coefs *. multiplier, new_len, new_pplen);
+
+    fv_checked(new_coef, new_len, new_pplen)
+}
+
+pub fn sum_fv_unchecked[N : Nat](xv : FixedVec[N]) -> Fixed[N, $post, @prover] where Vectorization {
+    Fixed {
+        coef : sum_uv(xv.coefs),
+        len : xv.len,
+        pplen : xv.pplen
+    }
+}
+
+pub fn scalar_prod_uv_fv_unchecked[N : Nat](xs : UIntVec[N], yv : FixedVec[N]) -> Fixed[N, $post, @prover] where Vectorization {
+    Fixed {
+        coef : scalar_prod_uv(xs, yv.coefs),
+        len : yv.len,
+        pplen : yv.pplen
+    }
+}
+
+pub fn min_fv[N : Nat](xv : FixedVec[N], yv : FixedVec[N]) -> FixedVec[N] where Field[N], Vectorization {
+    dbg_assert(xv.len == yv.len & xv.pplen == yv.pplen);
+    FixedVec {
+        coefs : min_uv(xv.coefs, yv.coefs, xv.len),
+        len : xv.len,
+        pplen : xv.pplen
+    }
+}
+
+pub fn min_fixed_fv[N : Nat](x : Fixed[N, $post, @prover], yv : FixedVec[N]) -> FixedVec[N] where Field[N], Vectorization {
+    dbg_assert(x.len == yv.len & x.pplen == yv.pplen);
+    FixedVec {
+        coefs : min_uint_uv(x.coef, yv.coefs, x.len),
+        len : x.len,
+        pplen : x.pplen
+    }
+}
+
+pub fn max_fv[N : Nat](xv : FixedVec[N], yv : FixedVec[N]) -> FixedVec[N] where Field[N], Vectorization {
+    dbg_assert(xv.len == yv.len & xv.pplen == yv.pplen);
+    FixedVec {
+        coefs : max_uv(xv.coefs, yv.coefs, xv.len),
+        len : xv.len,
+        pplen : xv.pplen
+    }
+}
+
+pub fn max_fixed_fv[N : Nat](x : Fixed[N, $post, @prover], yv : FixedVec[N]) -> FixedVec[N] where Field[N], Vectorization {
+    dbg_assert(x.len == yv.len & x.pplen == yv.pplen);
+    FixedVec {
+        coefs : max_uint_uv(x.coef, yv.coefs, x.len),
+        len : x.len,
+        pplen : x.pplen
+    }
+}
+
+pub fn ge_fv_fixed[N : Nat](xv : FixedVec[N], y : Fixed[N, $post, @prover]) -> UIntVec[N] where Field[N], Vectorization {
+    dbg_assert(xv.len == y.len & xv.pplen == y.pplen);
+    ge_uv_uint(xv.coefs, y.coef, xv.len)
+}
+
+pub fn le_fv_fixed[N : Nat](xv : FixedVec[N], y : Fixed[N, $post, @prover]) -> UIntVec[N] where Field[N], Vectorization {
+    dbg_assert(xv.len == y.len & xv.pplen == y.pplen);
+    le_uv_uint(xv.coefs, y.coef, xv.len)
+}
+
+fn check_coef_sqrt_fv[N : Nat](xv : FixedVec[N], res : FixedVec[N]) where Field[N], Vectorization {
+    let len' = xv.len-1; // length without the sign bit
+    //inequality checks use the same principle as in check_coef_div
+    //negative values underflow into the larger int[N] field values, and will not fit in len' bits
+
+    // check that x is nonnegative
+    check_fit_unsigned_uv(xv.coefs, len');
+
+    //check (1): x < 2^n is granted by other functions
+    //check (2): c < 2^n
+    check_fit_unsigned_uv(res.coefs, len');
+
+    let res_sq : UIntVec[N] = res.coefs *. res.coefs;
+    let pow2k = pow_pre(2,xv.pplen) : uint[N] $pre @public;
+
+    let middle = sub_uv(mul_preuint_uv(pow2k, xv.coefs), res_sq);
+    let right = add_preuint_uv(1, mul_preuint_uv(2, res.coefs));
+
+    // res.coef fits into len' bits, so res.coef*2+1 fits into len'+1 bits
+    let len'' = len'+1;
+
+    //check (3): 0 <= x * 2^2k - c^2
+    check_fit_unsigned_uv(middle,len'');
+
+    //check (4): x*2^2k - c^2 < 2c+1
+    assert_lt_uv(middle, right, len'');
+}
+
+pub fn sqrt_fv[N : Nat](xv : FixedVec[N]) -> FixedVec[N] where Field[N], Vectorization {
+    let res_coefs =
+        for i in 0 .. length(xv.coefs) {
+            let x = Fixed {
+                coef : xv.coefs[i] as $pre,
+                len : xv.len,
+                pplen : xv.pplen
+            };
+            let r = sqrt_fixed_pre(x);
+            r.coef
+        };
+    let res = fv_unchecked(array_to_post(freeze(res_coefs)), xv.len, xv.pplen);
+    check_coef_sqrt_fv(xv, res);
+    res
+}

@@ -1,0 +1,6 @@
+struct S { v : uint $pre @public }
+fn main() {
+    let s = S { v: 0 };
+    let v = wire { s.v };
+    assert_zero(v);
+}

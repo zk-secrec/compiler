@@ -1,0 +1,1 @@
+"repetition_times","The number of times a computation must be repeated in order to achieve error probability less than the reciprocal of 2 raised to the power given as the second argument, provided that each iteration succeeds with error probability less than the reciprocal of 2 raised to the power of the first argument."

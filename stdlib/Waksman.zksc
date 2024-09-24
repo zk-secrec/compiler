@@ -1,0 +1,169 @@
+/*
+ * Copyright 2024 Cybernetica AS
+ * 
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+use Vec::*;
+use Std::*;
+use Integer::*; // is_zero
+
+/*
+A Waksman network (WN) is encoded as a list of wire numbers.
+
+Switch ordering: initial; upper half recursively; lower half recursively; final.
+Input wire ordering: From top to bottom.
+Output wire ordering: From top to bottom.
+Input port ordering: In the switch ordering, followed by output wires.
+Output port ordering: In the switch ordering, following input wires.
+
+An encoding of WN lists all output ports in the order of input ports they are connected to.
+*/
+
+// Now built into the compiler, which made it about 70 times faster.
+// Assumes that n>0
+pub fn make_waksman_network(n : u64 $pre @public) -> list[u64 $pre @public] {
+    __make_waksman_network(n)
+}
+
+pub fn switches_of_perm[N : Nat, @D](template : list[u64 $pre @D]) -> list[bool[N] $pre @D] {
+    let switches = __permutation_switches(template);
+    for i in 0 .. length(switches) { switches[i] as bool[N] }
+}
+
+pub struct ApplySwitchingNetworkInterface[T : Qualified, N : Nat, @D] {
+    init : T, // Initial value, will not be used
+    cond_swap : bool[N] $post @D -> T -> T -> tuple[T, T], // if true then swap, if false then do not swap
+}
+
+fn apply_switching_network_uint_instance[N : Nat, @D]()
+  -> ApplySwitchingNetworkInterface[uint[N] $post @D, N, @D]
+{
+    ApplySwitchingNetworkInterface {
+        init: 0,
+        cond_swap: fn (b, x, y) {
+          let z = b as uint[N] * (y - x);
+          let f = x + z;
+          let s = y - z;
+          (f, s)
+        } ,
+    }
+}
+
+fn apply_switching_network_bool_instance[N : Nat, @D]()
+  -> ApplySwitchingNetworkInterface[bool[N] $post @D, N, @D]
+where Field[N] {
+    ApplySwitchingNetworkInterface {
+        init: false,
+        cond_swap: fn (b, x, y) {
+          let z = b & xor(x, y);
+          let f = xor(x, z);
+          let s = xor(y, z);
+          (f, s)
+        } ,
+    }
+}
+
+pub fn apply_switching_network_generic[T : Qualified, N : Nat, @D]
+( x : list[T]
+, netDesc : list[u64 $pre @public]
+, switches : list[bool[N] $post @D]
+, interface : ApplySwitchingNetworkInterface[T, N, @D]
+) -> list[T]
+{
+    // netDesc lists for each switch the index of its upper and its lower input. After the inputs of switches, the last length(x) elements give the elements of the array, from where to read the permuted network. The length of netDesc must be twice the length of switches, plus the length of x
+    let ll = length(x);
+    let len_netDesc = length(netDesc);
+    let cond_swap = interface.cond_swap;
+    let mut acc = interface.init;
+    let mut isUpper : bool $pre @public = false; // Upper or lower output port of the switch
+    let mut swaddr = -1; // Number of the switch
+    let rec content =
+        for i in 0 .. len_netDesc + ll {
+            if (i < ll) { // Input permutation
+                x[i]
+            }
+            else if (i < len_netDesc) { // Output ports of switches
+                isUpper = !isUpper;
+                if (isUpper) { // Upper output port
+                    let ill = i - ll; // Number of order inside WN
+                    let upperval = content[netDesc[ill]]; // Value at the upper input port of the switch
+                    let lowerval = content[netDesc[ill + 1]]; // Value at the lower input port of the switch
+                    swaddr = swaddr + 1;
+
+                    // If the current switch is false then interchange the upper and lower values of the switch
+                    let p = cond_swap(switches[swaddr], upperval, lowerval);
+                    acc = p.0;
+                    p.1
+                }
+                else {
+                    acc
+                }
+            }
+            else {
+                content[netDesc[i-ll]]
+            }
+        };
+    for i in 0 .. length(x) {
+        content[i + len_netDesc]
+    }
+}
+
+pub fn apply_switching_network_uint[N : Nat, @D](x : list[uint[N] $post @D], netDesc : list[u64 $pre @public], switches : list[bool[N] $post @D]) -> list[uint[N] $post @D] {
+    // netDesc lists for each switch the index of its upper and its lower input. After the inputs of switches, the last length(x) elements give the elements of the array, from where to read the permuted network. The length of netDesc must be twice the length of switches, plus the length of x
+    let ll = length(x);
+    let len_netDesc = length(netDesc);
+    let mut acc = 0;
+    let mut isUpper : bool $pre @public = false; // Upper or lower output port of the switch
+    let mut swaddr = -1; // Number of the switch
+    let rec content =
+        for i in 0 .. len_netDesc + ll {
+            if (i < ll) { // Input permutation
+                x[i]
+            }
+            else if (i < len_netDesc) { // Output ports of switches
+                isUpper = !isUpper;
+                if (isUpper) { // Upper output port
+                    let ill = i - ll; // Number of order inside WN
+                    let upperval = content[netDesc[ill]]; // Value at the upper input port of the switch
+                    let lowerval = content[netDesc[ill + 1]]; // Value at the lower input port of the switch
+                    swaddr = swaddr + 1;
+                    // If the current switch is false then interchange the upper and lower values of the switch
+                    let m = switches[swaddr] as uint[N];
+                    let z = m * (lowerval - upperval);
+                    acc = upperval + z;
+                    lowerval - z
+                }
+                else {
+                    acc
+                }
+            }
+            else {
+                content[netDesc[i-ll]]
+            }
+        };
+    for i in 0 .. length(x) {
+        content[i + len_netDesc]
+    }
+}
+/*
+pub fn apply_switching_network_uint[N : Nat, @D](x : list[uint[N] $post @D], netDesc : list[u64 $pre @public], switches : list[bool[N] $post @D]) -> list[uint[N] $post @D] {
+  apply_switching_network_generic(x, netDesc, switches, apply_switching_network_uint_instance())
+}
+*/
+pub fn apply_switching_network_bool[N : Nat, @D](x : list[bool[N] $post @D], netDesc : list[u64 $pre @public] $pre, switches : list[bool[N] $post @D]) -> list[bool[N] $post @D] 
+where Field[N] {
+  apply_switching_network_generic(x, netDesc, switches, apply_switching_network_bool_instance())
+}
+
+pub fn get_switches_for_sorting[N : Nat, @D](x : list[uint[N] $pre @D] $pre @public) -> list[bool[N] $post @D] $pre @public where Field[N], Vectorization {
+    let y = for i in 0 .. length(x) { x[i] as uint };
+    let sortPermutation : list[u64 $pre @D] = __get_sorting_permutation(y);
+    let result : list[bool $pre @D] = __permutation_switches(sortPermutation);
+    let switches : arr[bool[N] $post @D] = array_to_post(freeze(for i in 0 .. length(result) { result[i] as bool[N] }));
+    thaw(switches)
+}

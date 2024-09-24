@@ -1,0 +1,177 @@
+use Std::*;
+use Integer::*;
+
+struct PoseidonPermParams[N : Nat, $S, @D] {
+    alpha : uint[N] $pre @public,
+    R_F : uint $pre @public, 
+    R_P : uint $pre @public, 
+    round_constants : list[list[uint[N] $S @D]], 
+    mds_matrix : list[list[uint[N] $S @D]]
+}
+
+struct PoseidonSpongeParams[N : Nat, $S, @D] {
+    t : uint $pre @public, 
+    r : uint $pre @public, 
+    o : uint $pre @public, 
+    rate_first : bool $pre @public
+}
+
+pub struct PoseidonInstance[N : Nat, $S, @D] {
+    sponge_params : PoseidonSpongeParams[N, $S, @D],
+    perm_params : PoseidonPermParams[N, $S, @D],
+    inner_state : list[uint[N] $S @D]
+}
+
+// Apply matrix to a vector
+fn apply_matrix[N : Nat, $S, @D](A : list[list[uint[N] $S @D]], x : list[uint[N] $S @D]) -> list[uint[N] $S @D] {
+    let m : u64 = length(A);
+    let n : u64 = length(x);
+
+    // Check that the matrix and the vector have suitable dimensions for multiplying and that all matrix rows have the same length
+    for row_i in 0..m {
+        trace "The rows of the matrix must have the same length, equal to the dimension of the vector" {
+            dbg_assert(length(A[row_i]) == n);
+        }
+    };
+
+    // Apply matrix to the vector
+    for i in 0..m {
+        scalar_prod(A[i], x, n)
+    }
+}
+
+fn poseidon_full_round[N : Nat, $S, @D](ref inner_state : list[uint[N] $S @D], alpha : uint[N] $pre @public, round_constants_group : list[uint[N] $S @D], mds_matrix : list[list[uint[N] $S @D]]) 
+    where Field[N] {
+    let t : u64 = length(inner_state);
+    // Add round constants
+    for i in 0 .. t { inner_state[i] = inner_state[i] + round_constants_group[i] };
+    // Apply the S-box to all t field elements in the state
+    for j in 0 .. t {
+        // Raise the state element to the power alpha
+        inner_state[j] = pow_pre(inner_state[j], alpha);
+    }
+    // Multiply inner state with the MDS matrix and update the state
+    let res = apply_matrix(mds_matrix, inner_state);
+    for i in 0 .. t { inner_state[i] = res[i] };
+}
+
+fn poseidon_partial_round[N : Nat, $S, @D](ref inner_state : list[uint[N] $S @D], alpha : uint[N] $pre @public, round_constants_group : list[uint[N] $S @D], mds_matrix : list[list[uint[N] $S @D]], pow_i : u64 $pre @public) 
+    where Field[N] {
+    let t : u64 = length(inner_state);
+
+    // Add round constants
+    for i in 0 .. t { inner_state[i] = inner_state[i] + round_constants_group[i] };
+    // Apply the S-box to the specified field element in the state
+    // Raise the field element to the power alpha
+    inner_state[pow_i] = pow_pre(inner_state[pow_i], alpha);
+    // Multiply the inner state with an MDS matrix and update the state
+    let res = apply_matrix(mds_matrix, inner_state);
+    for i in 0 .. t { inner_state[i] = res[i] };
+}
+
+pub fn poseidon_perm[N : Nat, $S, @D](ref inner_state : list[uint[N] $S @D], perm_params : PoseidonPermParams[N, $S, @D], partial_round_pow_i : u64 $pre @public)
+    where Field[N] {
+    let t : u64 = length(inner_state);
+    let R_f : uint = perm_params.R_F / 2;
+    let R_P : uint = perm_params.R_P;
+
+    // First, R_f rounds with t S-boxes (full rounds)
+    for i in 0..R_f as u64 {
+        poseidon_full_round(ref inner_state, perm_params.alpha, perm_params.round_constants[i], perm_params.mds_matrix)
+    };
+    
+    // Second, R_P rounds with only one S-box
+    for i in 0..R_P as u64 {
+        poseidon_partial_round(ref inner_state, perm_params.alpha, perm_params.round_constants[R_f as u64 + i], perm_params.mds_matrix, partial_round_pow_i)
+    };
+
+    // Third, last R_f rounds with t S-boxes (full rounds)
+    for i in 0..R_f as u64 {
+        poseidon_full_round(ref inner_state, perm_params.alpha, perm_params.round_constants[(R_f + R_P) as u64 + i], perm_params.mds_matrix)
+    };
+
+}
+
+pub fn poseidon[N : Nat, $S, @D](data : list[uint[N] $S @D], t : uint[N] $S @public, r : uint[N] $S @public, o : uint[N] $S @public, alpha : uint[N] $S @public, R_F : uint[N] $S @public, R_P : uint[N] $S @public, round_constants : list[uint[N] $S @public], mds_matrix : list[list[uint[N] $S @public]], rate_first : bool $pre @public) -> list[uint[N] $S @D] 
+    where Field[N] {
+    let poseidon_obj : PoseidonInstance[N, $S, @D] = poseidon_initialize(t, r, o, alpha, R_F, R_P, round_constants, mds_matrix, rate_first);
+
+    // Absorption stage: absorb all data
+    let poseidon_obj = poseidon_continue(poseidon_obj, data);
+
+    // Squeeze-out stage: squeeze out and return the hash
+    poseidon_finalize(poseidon_obj)
+}
+
+// Functions for asynchronous Poseidon hash calculation
+pub fn poseidon_initialize[N : Nat, $S, @D](t : uint[N] $S @public, r : uint[N] $S @public, o : uint[N] $S @public, alpha : uint[N] $S @public, R_F : uint[N] $S @public, R_P : uint[N] $S @public, round_constants : list[uint[N] $S @public], mds_matrix : list[list[uint[N] $S @public]], rate_first : bool $pre @public) -> PoseidonInstance[N, $S, @D] {    
+    // Assert that rate is smaller than inner state size
+    trace "Data rate r must be smaller than the inner state size t" {
+        dbg_assert(r as $pre < t as $pre);
+    }
+    // Assert R_F is even
+    trace "R_F must be even" {
+        dbg_assert(R_F as $pre % 2 == 0);
+    }
+    
+    PoseidonInstance {
+        sponge_params : PoseidonSpongeParams {
+            t : t as $pre as uint, 
+            r : r as $pre as uint, 
+            o : o as $pre as uint,
+            rate_first : rate_first
+        },
+        perm_params : PoseidonPermParams {
+            alpha : alpha as $pre,
+            R_F : R_F as $pre as uint, 
+            R_P : R_P as $pre as uint, 
+            round_constants : group(for i in 0..length(round_constants) { round_constants[i] as @D }, t as $pre as u64), 
+            mds_matrix : for i in 0..length(mds_matrix) { for j in 0..length(mds_matrix[i]) { mds_matrix[i][j] as @D } }
+        },
+        inner_state : [0; t as $pre as u64]
+    }
+}
+
+pub fn poseidon_continue[N : Nat, $S, @D](poseidon_obj : PoseidonInstance[N, $S, @D], data : list[uint[N] $S @D]) -> PoseidonInstance[N, $S, @D] 
+    where Field[N] {
+    // Make sure that the data is padded and can be processed in an integer number of Poseidon permutations
+    trace "Data length needs to be a multiple of r" {
+        dbg_assert(length(data) as uint % poseidon_obj.sponge_params.r == 0);
+    }
+
+    // Divide data into chunks of length r (we can assume it is already padded)
+    let chunks = length(data) / poseidon_obj.sponge_params.r as u64;
+    let data_chunks = group(data, poseidon_obj.sponge_params.r as u64);
+
+    let mut inner_state = poseidon_obj.inner_state;
+    let rate_start_index : u64 $pre @public = if (poseidon_obj.sponge_params.rate_first) {0} else {(poseidon_obj.sponge_params.t - poseidon_obj.sponge_params.r) as u64};
+
+    // Absorption of the determined chunks
+    // Add data into the internal state, r elements at a time
+    for i in 0..chunks {  
+        for j in 0..poseidon_obj.sponge_params.r as u64 {  // Add each chunk into the internal state
+            inner_state[rate_start_index + j] = inner_state[rate_start_index + j] + data_chunks[i][j];
+        };
+        poseidon_perm(ref inner_state, poseidon_obj.perm_params, 0)
+    };
+
+    PoseidonInstance {
+        sponge_params : poseidon_obj.sponge_params,
+        perm_params : poseidon_obj.perm_params,
+        inner_state : inner_state
+    }
+}
+
+pub fn poseidon_finalize[N : Nat, $S, @D](poseidon_obj : PoseidonInstance[N, $S, @D]) -> list[uint[N] $S @D] 
+    where Field[N] {
+    let mut inner_state = poseidon_obj.inner_state;
+    let rate_start_index : u64 $pre @public = if (poseidon_obj.sponge_params.rate_first) {0} else {(poseidon_obj.sponge_params.t - poseidon_obj.sponge_params.r) as u64};
+
+    // Squeeze out the output
+    for i in 0..poseidon_obj.sponge_params.o as u64 {
+        if ((i % poseidon_obj.sponge_params.r as u64 == 0) & (i != 0)) {
+            poseidon_perm(ref inner_state, poseidon_obj.perm_params, 0)
+        };
+        inner_state[rate_start_index + i % poseidon_obj.sponge_params.r as u64]
+    }
+}

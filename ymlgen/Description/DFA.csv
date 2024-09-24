@@ -1,0 +1,4 @@
+"init_dfa","The DFA object with given fields."
+"dfa_to_prover","Conversion of the given DFA to the domain `@prover`."
+"dfa_to_pre","Conversion of the given DFA to the stage `$pre`."
+"runDFA","Test if the DFA given as the first argument recognizes the word given as the second argument."

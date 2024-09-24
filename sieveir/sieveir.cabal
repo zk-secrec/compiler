@@ -1,0 +1,43 @@
+name:          sieveir
+version:       0.1.0.0
+synopsis:      SIEVE IR binary format Haskell library
+license:       BSD3
+author:        Cybernetica AS
+copyright:     2024 Cybernetica AS
+build-type:    Simple
+cabal-version: 2.0
+data-files:    src/SieveIR/Internal/sieve.fbs
+
+Library
+  ghc-options:      -Wall -fno-warn-type-defaults -fno-warn-name-shadowing -fwarn-tabs -fno-ignore-asserts
+  default-language: Haskell2010
+  hs-source-dirs:   src
+  exposed-modules:  SieveIR,
+                    SieveIR.Format.Binary,
+                    SieveIR.Format.Text,
+                    SieveIR1,
+                    SieveIR1.Format.Text
+                    SieveIR1E,
+                    SieveIR1E.Format.Text
+  other-modules:    SieveIR.Internal.Schema,
+                    SieveIR.Types,
+                    SieveIR1.Types,
+                    SieveIR1E.Types
+  build-depends:    base,
+                    binary,
+                    bytestring,
+                    filepath,
+                    flatbuffers,
+                    mtl,
+                    pretty,
+                    template-haskell,
+                    text
+
+executable sieveir-example
+  main-is:          Main.hs
+  default-language: Haskell2010
+  ghc-options:      -Wall -fno-warn-type-defaults -fno-warn-name-shadowing -fwarn-tabs -fno-ignore-asserts
+  hs-source-dirs:   example
+  build-depends:    base,
+                    bytestring,
+                    sieveir

@@ -1,0 +1,374 @@
+/*
+This module contains vectorized functions using integer vectors (arr[uint[N] $post @prover],
+for which we also define a type synonym UIntVec[N]).
+It requires the Vectorization predicate. It uses the iter plugin if available. If iter plugin is not available
+then vectorized operations will be unrolled but will still be faster than a ZK-SecreC for loop.
+The unrolled circuit will be similar to that generated for a ZK-SecreC for loop but potentially much
+longer than the version using the iter plugin.
+
+The elements of the vectors must be $post @prover, which is the case where these functions are mostly needed.
+Most of the operations are applied to the vectors elementwise, the ith element of the output vector
+is usually the result of applying the operation to the ith elements of each input vector.
+For example, max_uv computes the elementwise maximum of two vectors, where
+the ith element of the output vector is the maximum of the ith elements of the two input vectors.
+
+In addition to vectors, some arguments can be scalars (uint[N] $post @prover) or constants (uint[N] $pre @public).
+To distinguish between the versions of the same operation with different arguments,
+the following suffixes are used:
+    _uv      integer vector (arr[uint[N] $post @prover] or UIntVec[N])
+    _uint    integer scalar (uint[N] $post @prover)
+    _preuint integer constant (uint[N] $pre @public)
+For example, 
+    mul_uint_uv    is multiplication of a vector by a scalar
+    mul_preuint_uv is multiplication of a vector by a constant
+    max_uv         is elementwise maximum of two vectors of equal length
+The version using a constant is more efficent than the version using a scalar,
+as it uses the @mulc and @addc gates instead of @mul and @add.
+Also, the version using a scalar is more efficient than
+creating a vector with all elements equal to the scalar and applying the version using two vectors.
+
+The operations that use comparisons or bitextracts have an extra parameter len : u64 $pre @public
+giving the number of bits in the integers in the arguments (scalars or vector elements),
+i.e. those integers are expected to be len-bit unsigned integers (in the range 0 .. 2^len-1),
+except for the functions is_nonnegative_uv and abs_uv,
+which expect len-bit signed integers (in the range -2^(len-1) .. 2^(len-1)-1).
+The comparisons and min/max assume that the modulus is at least 2^(len+1).
+Bitextract assumes that the modulus is at least 2^len.
+
+In functions returning boolean vectors, the booleans are represented as integers (uint[N] $post @prover),
+with 0 = false and 1 = true.
+
+The are no functions add_uv or mul_uv because builtins +. and *. implement those functions.
+There is a function sub_uv which is the same as the builtin -. but -. does not count all the wires,
+the wires containing -1 times elements of ys are not counted, since they are inside a function gate.
+Thus sub_uv should be used when the whole number of wires used in a ZK-SecreC program needs to be counted precisely,
+using -. will show the total number of wires as smaller than it actually is.
+
+Functions returning an integer vector:
+    add_uint_uv       adding a scalar to all elements of a vector
+    add_preuint_uv    adding a constant to all elements of a vector
+    mul_uint_uv       multiplying all elements of a vector by a scalar
+    mul_preuint_uv    multiplying all elements of a vector by a constant
+    negate_uv         negating (multiplying by -1) the elements of a vector
+    sub_uv            subtracting two vectors elementwise
+    sub_uint_uv       subtracting all elements of a vector from a scalar
+    sub_preuint_uv    subtracting all elements of a vector from a constant
+    max_uv            elementwise maximum of two vectors
+    max_uint_uv       ith element of output is the maximum of the scalar and the ith element of input
+    min_uv            elementwise minimum of two vectors
+    min_uint_uv       ith element of output is the minimum of the scalar and the ith element of input
+    abs_uv            taking absolute value of the elements of a vector
+
+Functions returning a vector whose elements are 0 or 1:
+    ge_uv             xs[i] >= ys[i]
+    ge_uv_uint        xs[i] >= y
+    le_uv             xs[i] <= ys[i]
+    le_uv_uint        xs[i] <= y
+    gt_uv             xs[i] > ys[i]
+    gt_uv_uint        xs[i] > y
+    lt_uv             xs[i] < ys[i]
+    lt_uv_uint        xs[i] < y
+    is_nonnegative_uv returns the signs of the elements of a vector considered as len-bit signed integers,
+                      where 1 = nonnegative, 0 = negative
+
+Boolean operations on vectors whose elements are 0 or 1:
+    and_uv            xs[i] && ys[i]
+    xor_uv            xs[i] xor ys[i]
+    or_uv             xs[i] || ys[i]
+    not_uv            !xs[i]
+
+Assertions:
+    assert_eq_uv      assert(xs[i] == ys[i]) for all i
+    assert_lt_uv      assert(xs[i] < ys[i]) for all i
+    assert_zero_uv    assert that each element of a vector is 0
+    assert_one_uv     assert that each element of a vector is 1 (a bit less efficient than assert_zero_uv)
+    check_bit_uv      assert that each element of a vector is 0 or 1
+
+Functions returning a scalar:
+    sum_uv            sum of the elements of a vector
+    scalar_prod_uv    scalar product (dot product) of two vectors
+
+Bitextract:
+    bitextract_uv     find the bitextract of each element of a vector,
+                      the ith element vector of the returned list contains the ith bit of each bitextract
+
+*/
+
+
+use Integer::*;
+use Std::*;
+
+pub type UIntVec[N : Nat] : Qualified = arr[uint[N] $post @prover] $pre @public;
+
+sieve fn add_const[N : Nat](c : uint[N] $post @prover, x : uint[N] $post @prover) -> uint[N] $post @prover {
+    c + x
+}
+
+pub fn add_uint_uv[N : Nat](c : uint[N] $post @prover, xs : UIntVec[N]) -> UIntVec[N] where Vectorization {
+    let f = add_const(c);
+    f.(xs)
+}
+
+sieve fn mul_const[N : Nat](c : uint[N] $post @prover, x : uint[N] $post @prover) -> uint[N] $post @prover {
+    c * x
+}
+
+pub fn mul_uint_uv[N : Nat](c : uint[N] $post @prover, xs : UIntVec[N]) -> UIntVec[N] where Vectorization {
+    let f = mul_const(c);
+    f.(xs)
+}
+
+sieve fn add_pre_const[N : Nat](c : uint[N] $pre @public, x : uint[N] $post @prover) -> uint[N] $post @prover where Field[N] {
+    ((wire {c}) as @prover) + x
+}
+
+pub fn add_preuint_uv[N : Nat](c : uint[N] $pre @public, xs : UIntVec[N]) -> UIntVec[N] where Field[N], Vectorization {
+    let f = add_pre_const(c);
+    f.(xs)
+}
+
+sieve fn mul_pre_const[N : Nat](c : uint[N] $pre @public, x : uint[N] $post @prover) -> uint[N] $post @prover where Field[N] {
+    ((wire {c}) as @prover) * x
+}
+
+pub fn mul_preuint_uv[N : Nat](c : uint[N] $pre @public, xs : UIntVec[N]) -> UIntVec[N] where Field[N], Vectorization {
+    let f = mul_pre_const(c);
+    f.(xs)
+}
+
+pub fn negate_uv[N : Nat](xs : UIntVec[N]) -> UIntVec[N] where Field[N], Vectorization {
+    mul_preuint_uv(-1, xs)
+}
+
+pub fn sub_uv[N : Nat](xs : UIntVec[N], ys : UIntVec[N]) -> UIntVec[N] where Field[N], Vectorization {
+    xs +. negate_uv(ys)
+
+    // The following works but does not count all the wires, the wires containing -1 times elements of ys are not counted, since they are
+    // inside a function gate:
+    //xs -. ys
+}
+
+pub fn sub_uint_uv[N : Nat](c : uint[N] $post @prover, xs : UIntVec[N]) -> UIntVec[N] where Field[N], Vectorization {
+    add_uint_uv(c, negate_uv(xs))
+}
+
+pub fn sub_preuint_uv[N : Nat](c : uint[N] $pre @public, xs : UIntVec[N]) -> UIntVec[N] where Field[N], Vectorization {
+    add_preuint_uv(c, negate_uv(xs))
+}
+
+// sum of the elements of the vector
+unchecked eff [*] -> * ! $post
+pub fn sum_uv[N : Nat](xs : UIntVec[N]) -> uint[N] $post @prover where Vectorization {
+    let n = length(xs);
+    if (n < 20) {
+        sum(xs)
+    } else {
+        let m = n / 2;
+        let m2 = 2*m;
+        let ys = xs[0 .. m] +. xs[m .. m2];
+        if (n == m2) {
+            sum_uv(ys)
+        } else {
+            sum_uv(ys) + xs[m2]
+        }
+    }
+}
+
+// multiplies the elements of a vector together using a logarithmic number of vectorized multiplications
+unchecked eff [*] -> * ! $post
+pub fn prod_uv[N : Nat](xs : UIntVec[N]) -> uint[N] $post @prover where Vectorization {
+    let n = length(xs);
+    if (n < 20) {
+        prod(xs)
+    } else {
+        let m = n / 2;
+        let m2 = 2*m;
+        let ys = xs[0 .. m] *. xs[m .. m2];
+        if (n == m2) {
+            prod_uv(ys)
+        } else {
+            prod_uv(ys) * xs[m2]
+        }
+    }
+}
+
+pub fn scalar_prod_uv[N : Nat](xs : UIntVec[N], ys : UIntVec[N]) -> uint[N] $post @prover where Vectorization {
+    sum_uv(xs *. ys)
+}
+
+// Check that each element of xs is 0 or 1.
+// It is recommended to apply make_unknown to xs before giving it as argument to check_bit_uv.
+pub fn check_bit_uv[N : Nat](xs : UIntVec[N]) where Field[N], Vectorization {
+    let t2 : UIntVec[N] = add_preuint_uv(-1, xs);
+    let t3 : UIntVec[N] = xs *. t2;
+    let trash : arr[() $pre @public] = assert_zero.(t3);
+}
+
+// the ith element vector of the returned list contains the ith bit of each bitextract
+pub fn bitextract_uv[N : Nat](xs : UIntVec[N], len : u64 $pre @public) -> list[UIntVec[N]] where Field[N], Vectorization {
+    let n = length(xs);
+    let bitvecs : list[UIntVec[N]] = bitextract_vec_helper(thaw(xs), len);
+    let bitvecs_unkn = make_unknown(bitvecs);
+    for i in 0 .. len {
+        check_bit_uv(bitvecs_unkn[i]);
+    }
+    let rec partialsums : list[UIntVec[N]] = for i in 0 .. len {
+      if (i == 0) { bitvecs_unkn[len - 1] }
+      else { 
+        let currentsum : UIntVec[N] = partialsums[i - 1];
+        let currentsum' : UIntVec[N] = currentsum +. currentsum;
+        currentsum' +. bitvecs_unkn[len - 1 - i]
+      }
+    };
+    let partialsum = partialsums[len - 1];
+    let xs_unkn = make_unknown(xs);
+    let t1 : UIntVec[N] = partialsum -. xs_unkn;
+    let trash : arr[() $pre @public] = assert_zero.(t1);
+    bitvecs
+}
+
+pub fn vectorized_bitextracts[N : Nat](xs : UIntVec[N], len : u64 $pre @public) -> list[UIntVec[N]] where Field[N], Vectorization {
+    bitextract_uv(xs, len)
+}
+
+// returns the signs of the elements of xs considered as len-bit signed integers
+// 1 = nonnegative
+// 0 = negative
+pub fn is_nonnegative_uv[N : Nat](xs : UIntVec[N], len : u64 $pre @public) -> UIntVec[N] where Field[N], Vectorization {
+    let pow2 : uint[N] $post @prover = (wire{pow_pre(2 : uint[N] $pre @public, len - 1)}) as @prover;
+    let xs2 = add_uint_uv(pow2, xs);
+    let bits = vectorized_bitextracts(xs2, len);
+    bits[len - 1]
+}
+
+// |xs[i]|
+// xs[i] are len-bit signed integers
+pub fn abs_uv[N : Nat](xs : UIntVec[N], len : u64 $pre @public) -> UIntVec[N] where Field[N], Vectorization {
+    let nn = is_nonnegative_uv(xs, len);
+    let sign = add_preuint_uv(-1, mul_preuint_uv(2, nn)); // 1 = nonnegative, -1 = negative
+    sign *. xs
+}
+
+// max(xs[i], ys[i])
+// xs[i] and ys[i] are len-bit unsigned integers
+pub fn max_uv[N : Nat](xs : UIntVec[N], ys : UIntVec[N], len : u64 $pre @public) -> UIntVec[N] where Field[N], Vectorization {
+    let diff = sub_uv(xs, ys);
+    let nn = is_nonnegative_uv(diff, len + 1);
+    let t : UIntVec[N] = nn *. diff;
+    ys +. t
+}
+
+// max(x, ys[i])
+// x and ys[i] are len-bit unsigned integers
+pub fn max_uint_uv[N : Nat](x : uint[N] $post @prover, ys : UIntVec[N], len : u64 $pre @public) -> UIntVec[N] where Field[N], Vectorization {
+    let diff = sub_uint_uv(x, ys);
+    let nn = is_nonnegative_uv(diff, len + 1);
+    let t : UIntVec[N] = nn *. diff;
+    ys +. t
+}
+
+// min(xs[i], ys[i])
+// xs[i] and ys[i] are len-bit unsigned integers
+pub fn min_uv[N : Nat](xs : UIntVec[N], ys : UIntVec[N], len : u64 $pre @public) -> UIntVec[N] where Field[N], Vectorization {
+    let diff = sub_uv(xs, ys);
+    let np = is_nonnegative_uv(negate_uv(diff), len + 1); // 1 if diff is nonpositive
+    let t : UIntVec[N] = np *. diff;
+    ys +. t
+}
+
+// min(x, ys[i])
+// x and ys[i] are len-bit unsigned integers
+pub fn min_uint_uv[N : Nat](x : uint[N] $post @prover, ys : UIntVec[N], len : u64 $pre @public) -> UIntVec[N] where Field[N], Vectorization {
+    let diff = sub_uint_uv(x, ys);
+    let np = is_nonnegative_uv(negate_uv(diff), len + 1); // 1 if diff is nonpositive
+    let t : UIntVec[N] = np *. diff;
+    ys +. t
+}
+
+// xs[i] >= ys[i]
+// xs[i] and ys[i] are len-bit unsigned integers
+pub fn ge_uv[N : Nat](xs : UIntVec[N], ys : UIntVec[N], len : u64 $pre @public) -> UIntVec[N] where Field[N], Vectorization {
+    is_nonnegative_uv(sub_uv(xs, ys), len + 1)
+}
+
+// xs[i] <= ys[i]
+// xs[i] and ys[i] are len-bit unsigned integers
+pub fn le_uv[N : Nat](xs : UIntVec[N], ys : UIntVec[N], len : u64 $pre @public) -> UIntVec[N] where Field[N], Vectorization {
+    ge_uv(ys, xs, len)
+}
+
+// xs[i] > ys[i]
+// xs[i] and ys[i] are len-bit unsigned integers
+pub fn gt_uv[N : Nat](xs : UIntVec[N], ys : UIntVec[N], len : u64 $pre @public) -> UIntVec[N] where Field[N], Vectorization {
+    not_uv(le_uv(xs, ys, len))
+}
+
+// xs[i] < ys[i]
+// xs[i] and ys[i] are len-bit unsigned integers
+pub fn lt_uv[N : Nat](xs : UIntVec[N], ys : UIntVec[N], len : u64 $pre @public) -> UIntVec[N] where Field[N], Vectorization {
+    not_uv(ge_uv(xs, ys, len))
+}
+
+// xs[i] >= y
+// xs[i] and y are len-bit unsigned integers
+pub fn ge_uv_uint[N : Nat](xs : UIntVec[N], y : uint[N] $post @prover, len : u64 $pre @public) -> UIntVec[N] where Field[N], Vectorization {
+    is_nonnegative_uv(add_uint_uv(-y, xs), len + 1)
+}
+
+// xs[i] <= y
+// xs[i] and y are len-bit unsigned integers
+pub fn le_uv_uint[N : Nat](xs : UIntVec[N], y : uint[N] $post @prover, len : u64 $pre @public) -> UIntVec[N] where Field[N], Vectorization {
+    is_nonnegative_uv(add_uint_uv(y, negate_uv(xs)), len + 1)
+}
+
+// xs[i] > y
+// xs[i] and y are len-bit unsigned integers
+pub fn gt_uv_uint[N : Nat](xs : UIntVec[N], y : uint[N] $post @prover, len : u64 $pre @public) -> UIntVec[N] where Field[N], Vectorization {
+    not_uv(le_uv_uint(xs, y, len))
+}
+
+// xs[i] < y
+// xs[i] and y are len-bit unsigned integers
+pub fn lt_uv_uint[N : Nat](xs : UIntVec[N], y : uint[N] $post @prover, len : u64 $pre @public) -> UIntVec[N] where Field[N], Vectorization {
+    not_uv(ge_uv_uint(xs, y, len))
+}
+
+// xs[i] && ys[i]
+// xs[i] and ys[i] are 0 or 1
+pub fn and_uv[N : Nat](xs : UIntVec[N], ys : UIntVec[N]) -> UIntVec[N] where Field[N], Vectorization {
+    xs *. ys
+}
+
+// xs[i] xor ys[i]
+// xs[i] and ys[i] are 0 or 1
+pub fn xor_uv[N : Nat](xs : UIntVec[N], ys : UIntVec[N]) -> UIntVec[N] where Field[N], Vectorization {
+    sub_uv(xs +. ys, mul_preuint_uv(2, xs *. ys))
+}
+
+// xs[i] || ys[i]
+// xs[i] and ys[i] are 0 or 1
+pub fn or_uv[N : Nat](xs : UIntVec[N], ys : UIntVec[N]) -> UIntVec[N] where Field[N], Vectorization {
+    sub_uv(xs +. ys, xs *. ys)
+}
+
+// !xs[i]
+// xs[i] are 0 or 1
+pub fn not_uv[N : Nat](xs : UIntVec[N]) -> UIntVec[N] where Field[N], Vectorization {
+    sub_preuint_uv(1, xs)
+}
+
+pub fn assert_zero_uv[N : Nat](xs : UIntVec[N]) where Field[N], Vectorization {
+    let trash : arr[() $pre @public] = assert_zero.(xs);
+}
+
+pub fn assert_one_uv[N : Nat](xs : UIntVec[N]) where Field[N], Vectorization {
+    assert_zero_uv(add_preuint_uv(-1, xs));
+}
+
+pub fn assert_eq_uv[N : Nat](xs : UIntVec[N], ys : UIntVec[N]) where Field[N], Vectorization {
+    assert_zero_uv(sub_uv(xs, ys));
+}
+
+pub fn assert_lt_uv[N : Nat](xs : UIntVec[N], ys : UIntVec[N], len : u64 $pre @public) where Field[N], Vectorization {
+    assert_zero_uv(ge_uv(xs, ys, len));
+}

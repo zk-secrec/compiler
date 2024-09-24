@@ -1,0 +1,652 @@
+/*
+ * Copyright 2024 Cybernetica AS
+ * 
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+use Std::*;
+use Integer::*;
+use Bitextract::*;
+use Perm::*;
+use Prob::*;
+use Vec::*;
+
+fn dbg_print_list[N : Nat]
+( name : string $pre @public
+, arg : list[uint[N] $pre @public]
+)
+{ dbg_print(name)
+; for w in 0 .. length(arg) { dbg_print(to_string(arg[w])) }
+;
+}
+
+fn repetitions[N : Nat]
+( byts : list[uint[N] $pre @prover]
+, byt_val : u64 $pre @public
+, bw : u64 $pre @public
+) -> list[bitarray[$pre, @prover, N]]
+{ let byts_inf = for i in 0 .. length(byts) { byts[i] as u64 }
+; let mut res = for k in 0 .. byt_val as @prover { 0 }
+; for i in 0 .. length(byts) { res[byts_inf[i]] = res[byts_inf[i]] + 1 }
+; for k in 0 .. byt_val { bitextract_pre(res[k as @prover], bw) }
+}
+
+pub struct SizeAsserter[N : Nat, $S, @D] 
+{ bw : u64 $pre @public
+, lim : uint $pre @public
+, vals : list[uint[N] $S @D]
+}
+
+impl SizeAsserter
+{ fn finalize[N : Nat, $S, @D](sizeasserter : SizeAsserter[N, $S, @D])
+  where Field[N], Vectorization
+  { let mut sizeasserter_copy = sizeasserter
+  ; sizeasserter_finalize(ref sizeasserter_copy)
+  }
+}
+
+// bw - max number of bits (0/1) needed to represent a value classified as normal by size
+// bw+1 must be strictly less than the floor of log2(N)
+// vals - the list of checked values
+pub fn sizeasserter_new[N : Nat, $S, @D]
+( bw : u64 $pre @public
+) -> SizeAsserter[N, $S, @D]
+{ dbg_assert(bw + 1 < log2(N) as u64)
+; SizeAsserter
+  { bw: bw
+  , lim: pow_pre_inf(2, bw)
+  , vals: []
+  }
+}
+
+pub fn sizeasserters_new[N : Nat, $S, @D]
+( bwlim : u64 $pre @public
+) -> list[SizeAsserter[N, $S, @D]]
+{ dbg_assert(bwlim < log2(N) as u64)
+; let rec lims = for i in 0 .. bwlim { if (i == 0) { 1 } else { lims[i - 1] * 2 } }
+; for i in 0 .. bwlim 
+  { SizeAsserter
+    { bw: i
+    , lim: lims[i]
+    , vals: []
+    }
+  }
+}
+
+unchecked eff [*,*,[*]] -> * ! $S
+fn sizeasserter_finalize_classic[N : Nat, $S, @D]
+( ref sizeasserter : SizeAsserter[N, $S, @D]
+)
+where Field[N], Vectorization
+{ let n = length(sizeasserter.vals)
+; if (post $S)
+  { if (@prover <= @D)
+    { if (n > 0)
+      { dbg_print("Finalizing $post @prover SizeAsserter with " ++ (to_string(n) ++ (" value" ++ ((if (n == 1) { "" } else { "s" }) ++ (" and bit width " ++ to_string(sizeasserter.bw))))))
+      ; let trash = bitextract_uv(freeze(sizeasserter.vals), sizeasserter.bw);
+      } 
+    } else
+    { for i in 0 .. n { assert(wire { (sizeasserter.vals[i] as $pre as uint < sizeasserter.lim as @D) as bool[N] }) }
+    ;
+    }
+  } else
+  { for i in 0 .. n { dbg_assert(sizeasserter.vals[i] as $pre as uint < sizeasserter.lim as @D) }
+  ;
+  }
+}
+
+sieve fn add_const[N : Nat](c : uint[N] $post @prover, x : uint[N] $post @prover) -> uint[N] $post @prover {
+    x + c
+}
+
+sieve fn add_const_public[N : Nat](c : uint[N] $pre @public, x : uint[N] $post @prover) -> uint[N] $post @prover where Field[N] {
+    x + ((wire {c}) as @prover)
+}
+
+sieve fn mul_const_public[N : Nat](c : uint[N] $pre @public, x : uint[N] $post @prover) -> uint[N] $post @prover where Field[N] {
+    ((wire {c}) as @prover) * x
+}
+
+// byts[i][j] must be the ith byt of the jth integer in the output
+fn byts_to_uint_vectorized[N : Nat]
+( byts : list[arr[uint[N] $post @prover]]
+, byt_val : uint $pre @public
+) -> arr[uint[N] $post @prover]
+where Field[N], Vectorization
+{ let bw = length(byts)
+; let mul_by_byt_val = mul_const_public(byt_val as uint[N])
+; let rec partialsums : list[arr[uint[N] $post @prover]] = for i in 0 .. bw
+  { if (i == 0) { byts[bw - 1] }
+    else
+    { let t : arr[uint[N] $post @prover] = mul_by_byt_val.(partialsums[i - 1])
+    ; t +. byts[bw - i - 1]
+    }
+  }
+; partialsums[bw - 1]
+}
+
+// multiplies a list of vectors elementwise
+fn vectorized_prods[N : Nat](xss : list[arr[uint[N] $post @prover]]) -> arr[uint[N] $post @prover] where Vectorization {
+  let rec partialprods : list[arr[uint[N] $post @prover]] = for i in 0 .. length(xss) {
+    if (i == 0) { xss[i] }
+    else {
+      partialprods[i - 1] *. xss[i]
+    }
+  };
+  partialprods[length(xss) - 1]
+}
+
+// the ith element of output is g[i] to the power of the exponent whose jth bit is e[j][i]
+fn vectorized_pow'[N : Nat]
+( g : arr[uint[N] $post @prover]
+, e : list[arr[uint[N] $post @prover]]
+, ebw : u64 $pre @public
+) -> arr[uint[N] $post @prover] where Vectorization, Field[N]
+{ let add_1 = add_const_public(1)
+; let add_minus_1 = add_const_public(-1)
+; let rec res : list[arr[uint[N] $post @prover]] = for i in 0 .. ebw
+  { let bit = e[ebw - i - 1]
+  //; let oneorg = 1 + bit * (g - 1)
+  ; let t1 : arr[uint[N] $post @prover] = add_minus_1.(g)
+  ; let t2 : arr[uint[N] $post @prover] = bit *. t1
+  ; let oneorg : arr[uint[N] $post @prover] = add_1.(t2)
+  ; if i == 0 { oneorg } else
+    { let a = res[i - 1]
+    ; let t : arr[uint[N] $post @prover] = a *. a
+    ; t *. oneorg
+    }
+  }
+; res[ebw - 1]
+}
+
+// converts the list to post and checks that the values put onto wires are 0 or 1
+fn pre_bool_list_to_post_uint_arr[N : Nat](xs : list[bool[N] $pre @prover]) -> arr[uint[N] $post @prover] where Vectorization, Field[N] {
+  let xs : arr[uint[N] $post @prover] = array_to_post(freeze(for i in 0 .. length(xs) { xs[i] as uint[N] }));
+  // array_to_post does not check that elements are 0 or 1, even if their type is bool[N],
+  // so we check them here in a vectorized way
+  let add_minus_1 = add_const_public(-1);
+  let t1 : arr[uint[N] $post @prover] = add_minus_1.(xs);
+  let t2 : arr[uint[N] $post @prover] = xs *. t1;
+  let trash : arr[() $pre @public] = assert_zero.(t2);
+  xs
+}
+
+fn sizeasserter_finalize_arya_helper[N : Nat]
+( n : u64 $pre @public
+, vals_pre : list[uint[N] $pre @prover]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+)
+where Field[N], Challenge[N], Vectorization
+{ if (n > 0)
+      { dbg_print("Finalizing Arya SizeAsserter with " ++ (to_string(length(sizeasserter.vals)) ++ (" value" ++ ((if (n == 1) { "" } else { "s" }) ++ (" and bit width " ++ to_string(sizeasserter.bw))))))
+      ; let logN = log2(N)
+      ; let rec pows = for w in 0 .. sizeasserter.bw { if (w == 0) { 1 } else { 2 * pows[w - 1] } }
+      ; let wids = for w in 0 .. sizeasserter.bw 
+        { let ratio = sizeasserter.bw / (w + 1)
+        ; if (ratio * (w + 1) == sizeasserter.bw) { ratio } else { ratio + 1 }
+        } // corresponding byt widths (counts of byts in representations)
+      ; let totals = for w in 0 .. sizeasserter.bw { n * wids[w] } // total counts of byts in bytextracts
+      ; let cnums = for w in 0 .. sizeasserter.bw { 2 * totals[w] + n } // number of operations in representation value checks
+      ; let logs = for w in 0 .. sizeasserter.bw { log2(totals[w] as uint) as u64 + 1 } 
+      ; let prenums = for w in 0 .. sizeasserter.bw { 2 * pows[w] * logs[w] } // number of operations before computing polynomials
+      ; let pol1s = for w in 0 .. sizeasserter.bw { 2 * totals[w] } // number of operations in computing the 1st polynomial
+      ; let pol2s = for w in 0 .. sizeasserter.bw { 10 * pows[w] * logs[w] } // number of operations in computing the 2nd polynomial
+      ; let anums = for w in 0 .. sizeasserter.bw { totals[w] + cnums[w] + 2 * pows[w] + prenums[w] + (pol1s[w] + pol2s[w] + 3) * repetition_times(logN - logs[w] as uint, 80) as u64 } // total number of operations in sizeasserter checks
+      ; let newtotals = for w in 0 .. sizeasserter.bw { totals[w] + 2 * pows[w] } 
+      /*
+      ; dbg_print_list("pows:", pows)
+      ; dbg_print_list("wids:", wids)
+      ; dbg_print_list("totals:", totals)
+      ; dbg_print_list("cnums:", cnums)
+      ; dbg_print_list("logs:", logs)
+      ; dbg_print_list("prenums:", prenums)
+      ; dbg_print_list("pol1s:", pol1s)
+      ; dbg_print_list("pol2s:", pol2s)
+      ; dbg_print_list("anums:", anums)
+      ; dbg_print_list("newtotals:", newtotals)
+      */
+      ; let permnums = for w in 0 .. sizeasserter.bw { newtotals[w] + (3 + 8 * newtotals[w]) * repetition_times(logN - log2(newtotals[w] as uint) - 1, 80) as u64 } // number of operations involved in apply_perm
+      ; let ordnums = for w in 0 .. sizeasserter.bw { 5 * (newtotals[w] - 1) } // number of operations in ordering check
+      ; let pnums = for w in 0 .. sizeasserter.bw { totals[w] + cnums[w] + 2 * pows[w] + permnums[w] + ordnums[w] + 2 } // number of operations in non-arya checks
+      /*
+      ; dbg_print_list("permnums:", permnums)
+      ; dbg_print_list("ordnums:", ordnums)
+      ; dbg_print_list("pnums:", pnums)
+      */
+      ; let mut mi = 0
+      ; for i in 1 .. sizeasserter.bw { if (anums[i] < anums[mi]) { mi = i } }
+      ; let mut mj = 0
+      ; for j in 1 .. sizeasserter.bw { if (pnums[j] < pnums[mj]) { mj = j } }
+      ; let is_arya = anums[mi] < pnums[mj]
+      ; let m = if (is_arya) { mi } else { mj }
+      /*
+      ; dbg_print(to_string(wids[m]))
+      ; dbg_print(to_string(2 * pows[m]))
+      ; dbg_print(to_string(m + 1))
+      */
+      ; let byt_width = wids[m]
+      ; let base = 2 * pows[m]
+      ; let base_log = m + 1
+      ; let base_uint = base as uint
+      ; if (n >= 10 & is_arya)
+        { //dbg_print("checks in $pre" : string $pre @public)
+          // since we use make_unknown to omit local computations for the vectorized $post checks,
+          // we do the local checks here separately (and much more efficiently than when the local computations mirrored the circuit computations);
+          // we compute the power of 2 only once instead of inefficiently recomputing it for each iteration
+          let pow2 = pow_pre(2, sizeasserter.bw)
+          ; for i in 0 .. n { dbg_assert(vals_pre[i] < pow2) }
+          //; dbg_print("bytss_pre1" : string $pre @public)
+          ; let bytss_pre1 = for i in 0 .. n { bytextract_pre(sizeasserter.vals[i] as $pre, byt_width, base_uint) }
+          //; dbg_print("bytss_pre" : string $pre @public)
+          ; let bytss_pre = for j in 0 .. byt_width { for i in 0 .. n { bytss_pre1[i][j] } }
+          //; dbg_print("bytss to wires" : string $pre @public)
+          ; let bytss = for j in 0 .. byt_width { array_to_post(freeze(bytss_pre[j])) }
+          //; dbg_print("bytss to byts" : string $pre @public)
+          ; let mut byts = for i in 0 .. n * byt_width { bytss[i / n][i % n] }
+          //; dbg_print("bytss_to_unknown" : string $pre @public)
+          ; let bytss = make_unknown(bytss)
+          //; dbg_print("byts_to_uint" : string $pre @public)
+          ; let cvals = byts_to_uint_vectorized(bytss, base_uint)
+          //; dbg_print("copying sizeasserter.vals to consecutive wires" : string $pre @public)
+          ; let frozen_vals = make_unknown(freeze(sizeasserter.vals))
+          //; dbg_print("assert_zero" : string $pre @public)
+          ; let mul_by_minus_1 = mul_const_public(-1)
+          ; let minus_cvals : arr[uint[N] $post @prover] = mul_by_minus_1.(cvals)
+          ; let to_assert_zero : arr[uint[N] $post @prover] = frozen_vals +. minus_cvals
+          ; let trash : arr[() $pre @public] = assert_zero.(to_assert_zero)
+          //; dbg_print("all_byts" : string $pre @public)
+          // converting form @public to @verifier before converting to $post is probably fine here
+          ; let all_byts = make_unknown(array_to_prover(array_to_post(freeze(for k in 0 .. base { k as uint[N] as @verifier }))))
+          ; let byts_pre = for i in 0 .. length(byts) { byts[i] as $pre}
+          ; let byt_val_inf = base_uint
+          ; let bw = log2(length(byts) as uint) as u64 + 1
+          ; let reps = repetitions(byts_pre, base, bw)
+          //; dbg_print("reps_dc" : string $pre @public)
+          ; let reps_dc = make_unknown(for j in 0 .. bw { pre_bool_list_to_post_uint_arr(for k in 0 .. base { reps[k][j] }) })
+          ; let rt = repetition_times(log2(N) - bw as uint, 80) as u64
+          //; dbg_print(string_append("repetition_times: ", to_string(rt)))
+          ; let rs = make_unknown(uint_list_to_prover(uint_list_to_post(challenge(rt as uint))))
+          ; for t in 0 .. rt
+            { let r = rs[t]
+            ; let add_r = add_const(r)
+            //; dbg_print("p1" : string $pre @public)
+            ; let r_minus_bytss = for i in 0 .. length(bytss) {
+                let minus_byts : arr[uint[N] $post @prover] = mul_by_minus_1.(bytss[i]);
+                let r_minus_byts : arr[uint[N] $post @prover] = add_r.(minus_byts);
+                r_minus_byts
+              }
+            ; let p1 = prod_uv(vectorized_prods(r_minus_bytss))
+            //; dbg_print("p2" : string $pre @public)
+            ; let minus_all_byts : arr[uint[N] $post @prover] = mul_by_minus_1.(all_byts)
+            ; let r_minus_all_byts : arr[uint[N] $post @prover] = add_r.(minus_all_byts)
+            ; let p2 = prod_uv(vectorized_pow'(r_minus_all_byts, reps_dc, bw))
+            ; assert_zero(p1 - p2)
+            }
+          ; {}
+        }
+        else
+        { let bytss_pre = for i in 0 .. n { bytextract_pre(sizeasserter.vals[i] as $pre, byt_width, base_uint) }
+        ; let bytss = for i in 0 .. n { for j in 0 .. byt_width { wire { bytss_pre[i][j] } } }
+        ; let mut byts = for i in 0 .. n * byt_width { bytss[i / byt_width][i % byt_width] }
+        ; let cvals = for i in 0 .. n { byts_to_uint(bytss[i], base_uint) }
+        ; for i in 0 .. n 
+          { assert_zero(sizeasserter.vals[i] - cvals[i]) 
+          }
+        ; let all_byts = for k in 0 .. base { (wire { k as uint[N] }) as @prover }
+        ; if (is_arya)
+          { let byts_pre = for i in 0 .. length(byts) { byts[i] as $pre}
+          ; let byt_val_inf = base_uint
+          ; let bw = log2(length(byts) as uint) as u64 + 1
+          ; let reps = repetitions(byts_pre, base, bw)
+          ; let reps_dc = for k in 0 .. base { for j in 0 .. bw { wire { reps[k][j] } } }
+          ; let times = repetition_times(log2(N) - bw as uint, 80) as u64
+          ; let rs = uint_list_to_prover(uint_list_to_post(challenge(times as uint)))
+          ; for t in 0 .. times
+            { let p1 = prod(for i in 0 .. length(byts) { rs[t] - byts[i] })
+            ; let p2 = prod(for k in 0 .. base { pow'(rs[t] - all_byts[k], reps_dc[k], bw) })
+            ; assert_zero(p1 - p2)
+            }
+          ;
+          }
+          else
+          { for k in 0 .. base { list_push(ref byts, all_byts[k]) }
+          ; let sort_perm = __get_sorting_permutation(for i in 0 .. length(byts) { byts[i] as $pre as uint })
+          ; let byts_sorted = apply_perm([byts], sort_perm)[0]
+          ; for i in 1 .. length(byts_sorted) { assert_zero((byts_sorted[i] - byts_sorted[i - 1]) * (byts_sorted[i] - byts_sorted[i - 1] - 1)) }
+          ; assert_zero(byts_sorted[length(byts_sorted) - 1] - (wire { base as uint[N] - 1 }) as @prover)
+          }
+        }
+      }
+}
+
+fn sizeasserter_finalize_arya[N : Nat, $S, @D]
+( ref sizeasserter : SizeAsserter[N, $S, @D]
+)
+where Field[N], Challenge[N], Vectorization
+{ let n = length(sizeasserter.vals)
+; let vals_pre = uint_list_to_pre(sizeasserter.vals)
+; if (post $S)
+  { if (@prover <= @D)
+    { sizeasserter_finalize_arya_helper(n, vals_pre, ref sizeasserter)
+    } else
+    { dbg_print("Skipping finalization of non-@prover sizeasserter" : string $pre @D)
+    ; for i in 0 .. n { assert(wire { (vals_pre[i] as uint < sizeasserter.lim as @D) as bool[N] }) }
+    ;
+    }
+  } else
+  { dbg_print("Skipping finalization of $pre sizeasserter" : string $pre @D)
+  ; for i in 0 .. n { dbg_assert(vals_pre[i] as uint < sizeasserter.lim as @D) }
+  ;
+  }
+}
+
+fn sizeasserter_finalize[N : Nat, $S, @D]
+( ref sizeasserter : SizeAsserter[N, $S, @D]
+)
+where Field[N], Vectorization
+{ if (Challenge[N]) { sizeasserter_finalize_arya(ref sizeasserter) }
+  else { sizeasserter_finalize_classic(ref sizeasserter) }
+}
+
+pub struct Checked[N : Nat, $S, @D]
+{ val : uint[N] $S @D
+}
+
+pub fn check_size[N : Nat, $S, @D]
+( x : uint[N] $S @D
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> Checked[N, $S, @D]
+where Field[N]
+{ if (post $S)
+  { if (@prover <= @D) 
+    { list_push(ref sizeasserter.vals, x) 
+    ; dbg_assert(x as $pre as uint < sizeasserter.lim as @prover)
+    }
+    else { assert(wire { (x as $pre as uint < sizeasserter.lim as @D) as bool[N] }) }
+  }
+  else { dbg_assert(x as uint < sizeasserter.lim as @D) }
+; Checked { val: x }
+}
+
+pub fn checked_prover[N : Nat, $S, @D]
+( x : Checked[N, $S, @D]
+) -> Checked[N, $S, @prover]
+{ Checked { val: x.val as @prover }
+}
+
+pub fn assert_le'[N : Nat]
+( xc : Checked[N, $post, @prover]
+, yc : Checked[N, $post, @prover]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) 
+where Field[N]
+{ let trash = check_size(yc.val - xc.val, ref sizeasserter)
+; 
+}
+
+pub fn assert_ge'[N : Nat]
+( xc : Checked[N, $post, @prover]
+, yc : Checked[N, $post, @prover]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) 
+where Field[N]
+{ let trash = check_size(xc.val - yc.val, ref sizeasserter)
+; 
+}
+
+pub fn assert_lt'[N : Nat]
+( xc : Checked[N, $post, @prover]
+, yc : Checked[N, $post, @prover]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) 
+where Field[N]
+{ let trash = check_size(yc.val - xc.val - 1, ref sizeasserter)
+; 
+}
+
+pub fn assert_gt'[N : Nat]
+( xc : Checked[N, $post, @prover]
+, yc : Checked[N, $post, @prover]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) 
+where Field[N]
+{ let trash = check_size(xc.val - yc.val - 1, ref sizeasserter)
+; 
+}
+
+pub fn le3'[N : Nat]
+( xc : Checked[N, $post, @prover]
+, yc : Checked[N, $post, @prover]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) -> bool[N] $post @prover
+where Field[N]
+{ let res = wire { xc.val as $pre <= yc.val as $pre }
+; let diff = uint_cond(res, yc.val - xc.val, xc.val - yc.val)
+; let trash = check_size(diff, ref sizeasserter)
+; eq(xc.val, yc.val) | res
+}
+
+pub fn ge3'[N : Nat]
+( xc : Checked[N, $post, @prover]
+, yc : Checked[N, $post, @prover]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) -> bool[N] $post @prover
+where Field[N]
+{ le3'(yc, xc, ref sizeasserter)
+}
+
+pub fn lt3'[N : Nat]
+( xc : Checked[N, $post, @prover]
+, yc : Checked[N, $post, @prover]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) -> bool[N] $post @prover
+where Field[N]
+{ !le3'(yc, xc, ref sizeasserter)
+}
+
+pub fn gt3'[N : Nat]
+( xc : Checked[N, $post, @prover]
+, yc : Checked[N, $post, @prover]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+) -> bool[N] $post @prover
+where Field[N]
+{ !le3'(xc, yc, ref sizeasserter)
+}
+
+pub fn assert_le[N : Nat]
+( x : uint[N] $post @prover
+, y : uint[N] $post @prover
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+)
+where Field[N]
+{ let x_checked = check_size(x, ref sizeasserter)
+; let y_checked = check_size(y, ref sizeasserter)
+; assert_le'(x_checked, y_checked, ref sizeasserter)
+}
+
+pub fn assert_ge[N : Nat]
+( x : uint[N] $post @prover
+, y : uint[N] $post @prover
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+)
+where Field[N]
+{ let x_checked = check_size(x, ref sizeasserter)
+; let y_checked = check_size(y, ref sizeasserter)
+; assert_ge'(x_checked, y_checked, ref sizeasserter)
+}
+
+pub fn assert_lt[N : Nat]
+( x : uint[N] $post @prover
+, y : uint[N] $post @prover
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+)
+where Field[N]
+{ let x_checked = check_size(x, ref sizeasserter)
+; let y_checked = check_size(y, ref sizeasserter)
+; assert_lt'(x_checked, y_checked, ref sizeasserter)
+}
+
+pub fn assert_gt[N : Nat]
+( x : uint[N] $post @prover
+, y : uint[N] $post @prover
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+)
+where Field[N]
+{ let x_checked = check_size(x, ref sizeasserter)
+; let y_checked = check_size(y, ref sizeasserter)
+; assert_gt'(x_checked, y_checked, ref sizeasserter)
+}
+
+pub fn assert_sorted[N : Nat]
+( xs : list[uint[N] $post @prover]
+, ref sizeasserter : SizeAsserter[N, $post, @prover]
+)
+where Field[N]
+{ let xs_checked = for i in 0 .. length(xs) { check_size(xs[i], ref sizeasserter) }
+; for i in 1 .. length(xs) { assert_le'(xs_checked[i - 1], xs_checked[i], ref sizeasserter) }
+;
+}
+
+pub fn le3[N : Nat, $S, @D]
+( x : uint[N] $S @D
+, y : uint[N] $S @D
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> bool[N] $S @D
+where Field[N]
+{ let res = bool_downcast(x as $pre <= y as $pre)
+; if (post $S) 
+  { if (@prover <= @D) 
+    { let smaller = uint_cond(res, x, y)
+    ; assert_le(smaller, x + y - smaller, ref sizeasserter) 
+    }
+  }
+; eq(x, y) | res
+}
+
+pub fn le[N : Nat, @D]
+( x : uint[N] $pre @D
+, y : uint[N] $pre @D
+) -> bool[N] $pre @D
+where Field[N]
+{ let mut sizeasserter = sizeasserter_new(0)
+; le3(x, y, ref sizeasserter)
+}
+
+pub fn ge3[N : Nat, $S, @D]
+( x : uint[N] $S @D
+, y : uint[N] $S @D
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> bool[N] $S @D
+where Field[N]
+{ le3(y, x, ref sizeasserter)
+}
+
+pub fn ge[N : Nat, @D]
+( x : uint[N] $pre @D
+, y : uint[N] $pre @D
+) -> bool[N] $pre @D
+where Field[N]
+{ le(y, x)
+}
+
+pub fn lt3[N : Nat, $S, @D]
+( x : uint[N] $S @D
+, y : uint[N] $S @D
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> bool[N] $S @D
+where Field[N]
+{ !le3(y, x, ref sizeasserter)
+}
+
+pub fn lt[N : Nat, @D]
+( x : uint[N] $pre @D
+, y : uint[N] $pre @D
+) -> bool[N] $pre @D
+where Field[N]
+{ !le(y, x)
+}
+
+pub fn gt3[N : Nat, $S, @D]
+( x : uint[N] $S @D
+, y : uint[N] $S @D
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> bool[N] $S @D
+where Field[N]
+{ !le3(x, y, ref sizeasserter)
+}
+
+pub fn gt[N : Nat, @D]
+( x : uint[N] $pre @D
+, y : uint[N] $pre @D
+) -> bool[N] $pre @D
+where Field[N]
+{ !le(x, y)
+}
+
+pub fn is_sorted3[N : Nat, $S, @D]
+( xs : list[uint[N] $S @D]
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> bool[N] $S @D
+where Field[N]
+{ if (length(xs) == 0) { true }
+  else
+  { let cmps = if (post $S)
+    { if (@prover <= @D)
+      { let xs_checked = for i in 0 .. length(xs) { check_size(xs[i], ref sizeasserter) }
+      ; for i in 1 .. length(xs) { le3'(xs_checked[i - 1], xs_checked[i], ref sizeasserter) }
+      }
+      else { for i in 1 .. length(xs) { bool_downcast(xs[i - 1] as $pre <= xs[i] as $pre) } }
+    }
+    else { for i in 1 .. length(xs) { bool_downcast(xs[i - 1] as $pre <= xs[i] as $pre) } }
+  ; all(cmps)
+  }
+}
+
+pub fn is_sorted[N : Nat, @D]
+( xs : list[uint[N] $pre @D]
+) -> bool[N] $pre @D
+where Field[N]
+{ let mut sizeasserter = sizeasserter_new(0)
+; is_sorted3(xs, ref sizeasserter)
+}
+
+pub fn min3[N : Nat, $S, @D]
+( x : uint[N] $S @D
+, y : uint[N] $S @D
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> uint[N] $S @D
+where Field[N] 
+{ uint_cond(le3(x, y, ref sizeasserter), x, y)
+}
+
+pub fn min[N : Nat, @D]
+( x : uint[N] $pre @D
+, y : uint[N] $pre @D
+) -> uint[N] $pre @D
+where Field[N]
+{ let mut sizeasserter = sizeasserter_new(0)
+; min3(x, y, ref sizeasserter)
+}
+
+pub fn max3[N : Nat, $S, @D]
+( x : uint[N] $S @D
+, y : uint[N] $S @D
+, ref sizeasserter : SizeAsserter[N, $S, @D]
+) -> uint[N] $S @D 
+where Field[N] 
+{ uint_cond(le3(x, y, ref sizeasserter), y, x)
+}
+
+pub fn max[N : Nat, @D]
+( x : uint[N] $pre @D
+, y : uint[N] $pre @D
+) -> uint[N] $pre @D
+where Field[N]
+{ let mut sizeasserter = sizeasserter_new(0)
+; max3(x, y, ref sizeasserter)
+}
+

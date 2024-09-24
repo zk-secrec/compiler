@@ -1,0 +1,104 @@
+{
+  "name": "ZK-SecreC",
+  "fileTypes": [ "zksc" ],
+  "scopeName": "source.zk-secrec",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#keywords" },
+    { "include": "#top-level-definitions" },
+    { "include": "#types" },
+    { "include": "#literals" },
+    { "include": "#variables" }
+  ],
+  "repository": {
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.zksc",
+          "match": "\\b(break|continue|else|for|if|return|while)\\b"
+        },
+        { "name": "keyword.zksc",
+          "match": "\\b(as|assert|assert_eq|assert_zero|dbg_assert_eq|dbg_assert|default|in|member|pub|rec|use|verifier|where|wire)\\b"
+        },
+        { "name": "storage.type.zksc",
+          "match": "\\b(let|const|mut|ref)\\b"
+        },
+        { "name": "keyword.operator",
+          "match": "==|=>|<=|>=|\\->|::|\\.\\.|=|\\+|\\-|\\*|/|%|\\^|&|\\||!|<|>|:|\\."
+        }
+      ]
+    },
+    "top-level-definitions": {
+      "patterns": [
+        { "match": "\\b(fn|struct|type)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.zksc"
+            },
+            "2": {
+              "name": "variable.other.zksc"
+            }
+          }
+        },
+        { "match": "\\b(sieve|fn)",
+          "name": "keyword.zksc"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        { "comment": "domains",
+          "name": "support.type.zksc",
+          "match": "@(public|prover|verifier)\\b"
+        },
+        { "comment": "stages",
+          "name": "support.type.zksc",
+          "match": "\\$(pre|post)\\b"
+        },
+        { "comment": "other types",
+          "name": "support.type.zksc",
+          "match": "\\b(bool|Domain|list|Nat|Qualified|Stage|store|string|struct|tuple|uint|unit|Unqualified)\\b"
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        { "comment": "integer literal",
+          "name": "constant.numeric.zksc",
+          "match": "\\b[0-9]+\\b"
+        },
+        { "comment": "hex integer literal",
+          "name": "constant.numeric.zksc",
+          "match": "\\b0x[0-9a-fA-F]+\\b"
+        },
+        { "comment": "binary integer literal",
+          "name": "constant.numeric.zksc",
+          "match": "\\b0b[0-1]+\\b"
+        },
+        { "comment": "octal integer literal",
+          "name": "constant.numeric.zksc",
+          "match": "\\b0o[0-7]+\\b"
+        },
+        { "name": "string.quoted.zksc",
+          "begin": "\"",
+          "end": "\""
+        },
+        { "name": "constant.language.boolean.zksc",
+          "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        { "comment": "line comment",
+          "name": "comment.line.zksc",
+          "match": "\\s*//.*"
+        },
+        { "comment": "block comment",
+          "name": "comment.block.zksc",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    }
+  }
+}

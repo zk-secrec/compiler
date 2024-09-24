@@ -1,0 +1,67 @@
+// This module is needed by FastFixedPoint.zksc.
+
+/*
+ * Copyright 2024 Cybernetica AS
+ * 
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+use Std::*;
+use Bitextract::*;
+use Integer::*;
+
+fn threebitselect[$S, @D, N : Nat](x : uint[N] $S @D, y : uint[N] $S @D, z : uint[N] $S @D) -> uint[N] $S @D {
+  let p = y * z;
+  let s = y + z - p;
+  s + (p - s) * x
+}
+
+// Both xb and yb must have length at least bw
+pub fn less_than[$S, @D, N : Nat](xb : list[bool[N] $S @D], yb : list[bool[N] $S @D], bw : u64 $pre @public) -> bool[N] $S @D where Field[N] {
+  let rec res = for i in 0 .. bw {
+    if (i == 0) { (1 - xb[0] as uint[N]) * yb[0] as uint[N] }
+    else { threebitselect(xb[i] as uint[N], yb[i] as uint[N], res[i - 1]) }
+  };
+  uint_to_bool(res[bw - 1])
+}
+
+pub fn lt'[$S, @D, N : Nat](x : bitarray[$S, @D, N], y : bitarray[$S, @D, N], bw : u64 $pre @public) -> bool[N] $S @D where Field[N] {
+    less_than(x, y, bw)
+}
+
+unchecked eff * -> * -> * -> * ! $S
+pub fn lt[$S, @D, N : Nat](x : uint[N] $S @D, y : uint[N] $S @D, bw : u64 $pre @public) -> bool[N] $S @D where Field[N] {
+    if (post $S) {
+      if (@prover <= @D) { lt'(bitextract(x, bw), bitextract(y, bw), bw) } 
+      else { wire { x as $pre < y as $pre } }
+    } else { x < y }
+}
+
+pub fn gt'[$S, @D, N : Nat](x : bitarray[$S, @D, N], y : bitarray[$S, @D, N], bw : u64 $pre @public) -> bool[N] $S @D where Field[N] {
+    less_than(y, x, bw)
+}
+
+pub fn gt[$S, @D, N : Nat](x : uint[N] $S @D, y : uint[N] $S @D, bw : u64 $pre @public) -> bool[N] $S @D where Field[N] {
+    lt(y, x, bw)
+}
+
+pub fn le'[$S, @D, N : Nat](x : bitarray[$S, @D, N], y : bitarray[$S, @D, N], bw : u64 $pre @public) -> bool[N] $S @D where Field[N] {
+    !gt'(x, y, bw)
+}
+
+pub fn le[$S, @D, N : Nat](x : uint[N] $S @D, y : uint[N] $S @D, bw : u64 $pre @public) -> bool[N] $S @D where Field[N] {
+    !gt(x, y, bw)
+}
+
+pub fn ge'[$S, @D, N : Nat](x : bitarray[$S, @D, N], y : bitarray[$S, @D, N], bw : u64 $pre @public) -> bool[N] $S @D where Field[N] {
+    !lt'(x, y, bw)
+}
+
+pub fn ge[$S, @D, N : Nat](x : uint[N] $S @D, y : uint[N] $S @D, bw : u64 $pre @public) -> bool[N] $S @D where Field[N] {
+    !lt(x, y, bw)
+}
+

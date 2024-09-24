@@ -1,0 +1,269 @@
+/*
+ * Copyright 2024 Cybernetica AS
+ * 
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+use Std::*;
+use Integer::*;
+use Inequalities::*;
+use BigInt::*;
+
+fn P() -> uint $pre @public { 39402006196394479212279040100143613805079739270465446667948293404245721771496870329047266088258938001861606973112319 }
+fn Q() -> uint $pre @public { 39402006196394479212279040100143613805079739270465446667946905279627659399113263569398956308152294913554433653942643 }
+
+pub struct ECPointNZ[N : Nat, $S, @D] {
+  p : BigInt[N, $S, @D],
+  q : BigInt[N, $S, @D],
+}
+
+pub struct UECPointNZ[@D] {
+  p : uint $pre @D,
+  q : uint $pre @D,
+}
+
+type Digest[N : Nat, @D] : Unqualified = BigInt[N, $post, @D];
+pub type PublicKey[N : Nat, $S, @D] : Unqualified = ECPointNZ[N, $S, @D];
+pub type Signature[N : Nat, $S, @D] : Unqualified = ECPointNZ[N, $S, @D];
+
+fn uec_add[@D](x : UECPointNZ[@D], y : UECPointNZ[@D]) -> UECPointNZ[@D] {
+    dbg_print("uec_add, arguments are (" ++ (to_string(x.p) ++ (", " ++ (to_string(x.q) ++ (") and (" ++ (to_string(y.p) ++ (", " ++ (to_string(y.q) ++ ")"))))))));
+    let s = ((x.q - y.q) * __mod_invert((x.p - y.p) % (P() as @D), (P() as @D))) % (P() as @D);
+    let z0 = (s * s - x.p - y.p) % (P() as @D);
+    let z1 = (- (x.q + s * (z0 - x.p))) % (P() as @D);
+    dbg_print("Result is (" ++ (to_string(z0) ++ ("," ++ (to_string(z1) ++ ")"))));
+    UECPointNZ {
+        p : z0,
+        q : z1,
+    }
+}
+
+fn uec_dbl[@D](x : UECPointNZ[@D]) -> UECPointNZ[@D] {
+    dbg_print("uec_dbl, argument is (" ++ (to_string(x.p) ++ ("," ++ (to_string(x.q) ++ ")"))));
+    let s = ((3 * x.p * x.p - 3) * __mod_invert(2 * x.q, P() as @D)) % (P() as @D);
+    let z0 = (s * s - 2 * x.p) % (P() as @D);
+    let z1 = (- (x.q + s * (z0 - x.p))) % (P() as @D);
+    dbg_print("Result is (" ++ (to_string(z0) ++ ("," ++ (to_string(z1) ++ ")"))));
+    UECPointNZ {
+        p : z0,
+        q : z1,
+    }
+}
+
+fn choose_in_ecpt[N : Nat](b : uint[N] $post @prover, t : ECPointNZ[N, $post, @prover], f : ECPointNZ[N, $post, @prover]) -> ECPointNZ[N, $post, @prover] {
+  ECPointNZ {
+    p : BigInt_choose(b, t.p, f.p),
+    q : BigInt_choose(b, t.q, f.q)
+  }
+}
+
+fn ec_add[N : Nat, @D](x : ECPointNZ[N, $post, @D], y : ECPointNZ[N, $post, @D], ref sizeasserters : list[SizeAsserter[N, $post, @D]]) -> ECPointNZ[N, $post, @D] where Field[N] {
+    dbg_print("ec_add, arguments are (" ++ (to_string(BigInt_to_uint(x.p)) ++ (", " ++ (to_string(BigInt_to_uint(x.q)) ++ (") and (" ++ (to_string(BigInt_to_uint(y.p)) ++ (", " ++ (to_string(BigInt_to_uint(y.q)) ++ ")"))))))));
+    let s : BigInt[N, $post, @D] = BigInt_mod_div(BigInt_sub(x.q, y.q), BigInt_sub(x.p, y.p), P(), ref sizeasserters);
+    BigInt_assert_normalization(s, ref sizeasserters);
+    let z0 = BigInt_modconst(BigInt_sub(BigInt_sub(BigInt_mul(s, s), x.p), y.p), P(), ref sizeasserters);
+    BigInt_assert_normalization(z0, ref sizeasserters);
+    let z1 = BigInt_modconst(BigInt_neg(BigInt_add(x.q, BigInt_mul(s, BigInt_sub(z0, x.p)))), P(), ref sizeasserters);
+    BigInt_assert_normalization(z1, ref sizeasserters);
+    dbg_print("Result is (" ++ (to_string(BigInt_to_uint(z0)) ++ ("," ++ (to_string(BigInt_to_uint(z1)) ++ ")"))));
+    ECPointNZ {
+      p: z0,
+      q: z1,
+    }
+}
+
+fn ec_dbl[N : Nat, @D](x : ECPointNZ[N, $post, @D], ref sizeasserters : list[SizeAsserter[N, $post, @D]]) -> ECPointNZ[N, $post, @D] where Field[N] {
+    dbg_print("ec_dbl, argument is (" ++ (to_string(BigInt_to_uint(x.p)) ++ ("," ++ (to_string(BigInt_to_uint(x.q)) ++ ")"))));
+    let three : BigInt[N, $post, @D] = BigInt_to_post(BigInt_from_uint(3, 1, x.p.bpb));
+    let s = BigInt_mod_div(BigInt_normalize_post(BigInt_sub(BigInt_constmul(3, BigInt_mul(x.p, x.p)), three), ref sizeasserters), BigInt_constmul(2, x.q), P(), ref sizeasserters);
+    BigInt_assert_normalization(s, ref sizeasserters);
+    let z0 = BigInt_modconst(BigInt_sub(BigInt_sub(BigInt_mul(s, s), x.p), x.p), P(), ref sizeasserters);
+    BigInt_assert_normalization(z0, ref sizeasserters);
+    let z1 = BigInt_modconst(BigInt_neg(BigInt_add(x.q, BigInt_mul(s, BigInt_sub(z0, x.p)))), P(), ref sizeasserters);
+    BigInt_assert_normalization(z1, ref sizeasserters);
+    dbg_print("Result is (" ++ (to_string(BigInt_to_uint(z0)) ++ ("," ++ (to_string(BigInt_to_uint(z1)) ++ ")"))));
+    ECPointNZ {
+      p: z0,
+      q: z1,
+    }
+}
+
+// Adds something to the y-coordinate of the EC point, if the boolean argument (indicating whether the point should be non-zero) is false
+fn ec_adjY[N : Nat, @D](x : ECPointNZ[N, $post, @D], b : bool[N] $post @D) -> ECPointNZ[N, $post, @D] where Field[N] {
+  ECPointNZ {
+    p: x.p,
+    q: BigInt_add(
+      x.q,
+      BigInt_to_post(BigInt_from_uint(1 - b as $pre as bool as uint, 1, x.p.bpb)),
+    )
+  }
+}
+
+fn ec_scmult[N : Nat](x0 : ECPointNZ[N, $post, @prover], pw : list[bool[N] $post @prover], ref sizeasserters : list[SizeAsserter[N, $post, @prover]]) -> ECPointNZ[N, $post, @prover] where Field[N] {
+    let wp : list[bool[N] $post @prover] = for i in 0 .. length(pw) {
+        pw[length(pw) - i - 1]
+    };
+    let x = ECPointNZ {
+        p : BigInt_normalize_post(x0.p, ref sizeasserters),
+        q : BigInt_normalize_post(x0.q, ref sizeasserters)
+    };
+    let rec wp_pfxOR : list[bool[N] $post @prover] = for i in 0 .. length(wp) + 1 {
+        if (i == 0) {
+            false
+        } else {
+            wp[i-1] | wp_pfxOR[i-1]
+        }
+    };
+    let rec mst : list[ECPointNZ[N, $post, @prover]] = for i in 0 .. length(wp_pfxOR) {
+        dbg_print("ec_scmult, start iteration no. " ++ to_string(i));
+        if (i == 0) {
+            ECPointNZ {
+              p: BigInt_to_post(BigInt_from_uint(0, 1, x.p.bpb)),
+              q: BigInt_to_post(BigInt_from_uint(0, 1, x.p.bpb))
+            }
+        } else {
+            let dd : ECPointNZ[N, $post, @prover] = ec_dbl(ec_adjY(mst[i-1], wp_pfxOR[i-1]), ref sizeasserters);
+            let cond = (wp_pfxOR[i] as uint[N]) - (wp_pfxOR[i-1] as uint[N]);
+            let bb = ec_add(dd, x, ref sizeasserters);
+            let aa : ECPointNZ[N, $post, @prover] = choose_in_ecpt(cond , x, bb);
+            choose_in_ecpt((wp[i-1] as uint[N]), aa, dd)
+        }
+    };
+    mst[length(wp_pfxOR) - 1]
+}
+
+fn ec_add_from_window[N : Nat](
+  is0 : uint[N] $post @prover,
+  st : ECPointNZ[N, $post, @prover],
+  wnd : list[UECPointNZ[@public]],
+  s0 : bool[N] $post @prover,
+  s1 : bool[N] $post @prover,
+  s2 : bool[N] $post @prover,
+  ref sizeasserters : list[SizeAsserter[N, $post, @prover]]
+) -> tuple[uint[N] $post @prover, ECPointNZ[N, $post, @prover]] where Field[N] {
+
+    let v0 = s0 as uint[N];
+    let v1 = s1 as uint[N];
+    let v2 = s2 as uint[N];
+    let v1and2 = v1 * v2;
+    let threezero = (1 - v0) * (1 - v1 - v2 + v1and2);
+    dbg_print("ec_add_from_window, three bits are " ++ (to_string(v0 as $pre) ++ (to_string(v1 as $pre) ++ to_string(v2 as $pre))));
+    for i in 0 .. length(wnd) {
+        dbg_print(to_string(i) ++ ("-th point is (" ++ (to_string(wnd[i].p) ++ ("," ++ (to_string(wnd[i].q) ++ ")")))));
+    }
+    dbg_print("Starting point is (" ++ (to_string(BigInt_to_uint(st.p)) ++ ("," ++ (to_string(BigInt_to_uint(st.q)) ++ ")"))));
+
+    let one : BigInt[N, $post, @prover] = BigInt_to_post(BigInt_from_uint(1, 1, 26));
+
+    let x_odd = BigInt_add(BigInt_cast(BigInt_to_post(BigInt_from_uint(wnd[0].p, 15, 26))), BigInt_add(BigInt_from_uint_select(wnd[2].p-wnd[0].p, 15, 26, v1), BigInt_add(BigInt_from_uint_select(wnd[4].p-wnd[0].p, 15, 26, v2), BigInt_from_uint_select(wnd[6].p+wnd[0].p-wnd[2].p-wnd[4].p, 15, 26, v1and2))));
+    let x_even = BigInt_add(one, BigInt_add(BigInt_from_uint_select(wnd[1].p-1, 15, 26, v1), BigInt_add(BigInt_from_uint_select(wnd[3].p-1, 15, 26, v2), BigInt_from_uint_select(wnd[5].p+1-wnd[1].p-wnd[3].p, 15, 26, v1and2))));
+    let y_odd = BigInt_add(BigInt_cast(BigInt_to_post(BigInt_from_uint(wnd[0].q, 15, 26))), BigInt_add(BigInt_from_uint_select(wnd[2].q-wnd[0].q, 15, 26, v1), BigInt_add(BigInt_from_uint_select(wnd[4].q-wnd[0].q, 15, 26, v2), BigInt_from_uint_select(wnd[6].q+wnd[0].q-wnd[2].q-wnd[4].q, 15, 26, v1and2))));
+    let y_even = BigInt_add(one, BigInt_add(BigInt_from_uint_select(wnd[1].q-1, 15, 26, v1), BigInt_add(BigInt_from_uint_select(wnd[3].q-1, 15, 26, v2), BigInt_from_uint_select(wnd[5].q+1-wnd[1].q-wnd[3].q, 15, 26, v1and2))));
+
+    let x = BigInt_choose(v0, x_odd, x_even);
+    let y = BigInt_choose(v0, y_odd, y_even);
+    let newpoint = ECPointNZ {
+        p : BigInt_modconst(x, P(), ref sizeasserters),
+        q : BigInt_modconst(y, P(), ref sizeasserters)
+    };
+    BigInt_assert_normalization(newpoint.p, ref sizeasserters);
+    BigInt_assert_normalization(newpoint.q, ref sizeasserters);
+    let r = choose_in_ecpt(is0, newpoint, ec_add(st, newpoint, ref sizeasserters));
+    dbg_print("Computed r is (" ++ (to_string(BigInt_to_uint(r.p)) ++ ("," ++ (to_string(BigInt_to_uint(r.q)) ++ ")"))));
+    (threezero, choose_in_ecpt(threezero, st, r))
+}
+
+fn ec_scmult_fixbase[N : Nat](fp : list[list[UECPointNZ[@public]]], pw : list[bool[N] $post @prover], ref sizeasserters : list[SizeAsserter[N, $post, @prover]]) -> ECPointNZ[N, $post, @prover] where Field[N] {
+    let zero : BigInt[N, $post, @prover] = BigInt_to_post(BigInt_from_uint(0, 1, 26));
+//    let one : BigInt[N, $post, @prover] = BigInt_to_post(BigInt_from_uint(1, 1, 26));
+    let rec res = for i in 0 .. 129 {
+        dbg_print("ec_scmult_fixbase, start iteration no. " ++ to_string(i));
+        if (i == 0) {
+            (1, ECPointNZ{p: zero,q: zero})
+        } else {
+            let rp = ec_add_from_window((res[i-1]).0, (res[i-1]).1, fp[i-1], pw[3*(i-1)], pw[3*(i-1)+1], pw[3*(i-1)+2], ref sizeasserters);
+            (res[i-1].0 * rp.0, rp.1)                                 // 1 multiplication
+        }
+    };
+    res[128].1
+}
+
+pub fn assert_checksig[N : Nat](
+  z : list[bool[2] $post @prover],
+  pk : PublicKey[N, $post, @prover],
+  S : Signature[N, $post, @prover],
+  fixpowers : list[list[UECPointNZ[@public]]],
+  ref sizeasserters : list[SizeAsserter[N, $post, @prover]]
+) where Field[N], Convertible[2,N] {
+    // We reverse z because SHA256 result is most significant bit first but conversions expect least significant bit first.
+    let biz : BigInt[N, $post, @prover] = BigInt_from_bool2_array(reverse(z), 26);
+
+    // TODO: the rest of the function is the same as assert_checksig (with BigInts)
+    let u : BigInt[N, $post, @prover] = BigInt_mod_div(biz, S.q, Q(), ref sizeasserters);
+    BigInt_assert_normalization(u, ref sizeasserters);
+    let v : BigInt[N, $post, @prover] = BigInt_mod_div(S.p, S.q, Q(), ref sizeasserters);
+    BigInt_assert_normalization(v, ref sizeasserters);
+    dbg_print("Important parameters of signature check:" : string $pre @public);
+    dbg_print(to_string(BigInt_to_uint(biz)));
+    dbg_print(to_string(BigInt_to_uint(S.p)));
+    dbg_print(to_string(BigInt_to_uint(S.q)));
+    dbg_print(to_string(BigInt_to_uint(u)));
+    dbg_print(to_string(BigInt_to_uint(v)));
+    let ub0 : list[bool[N] $post @prover] = BigInt_to_bitarray(u);
+    let ub = for i in 0 .. field_bit_width(P()) { ub0[i] };
+    let vb0 : list[bool[N] $post @prover] = BigInt_to_bitarray(v);
+    let vb = for i in 0 .. field_bit_width(P()) { vb0[i] };
+    dbg_print("Start computing Z" : string $pre @public);
+    dbg_print("ub is" : string $pre @public);
+    for i in 0 .. length(ub) {
+        dbg_print(to_string(i) as @prover ++ ("-th position contains " ++ to_string(ub[i] as $pre)));
+    };
+    dbg_print("vb is" : string $pre @public);
+    for i in 0 .. length(vb) {
+        dbg_print(to_string(i) as @prover ++ ("-th position contains " ++ to_string(vb[i] as $pre)));
+    };
+    dbg_print("public key is" : string $pre @public);
+    dbg_print(to_string(BigInt_to_uint(pk.p)));
+    dbg_print(to_string(BigInt_to_uint(pk.q)));
+    let Z = ec_add(ec_scmult_fixbase(fixpowers, ub, ref sizeasserters), ec_scmult(pk, vb, ref sizeasserters), ref sizeasserters);
+    BigInt_assert_eq(Z.p, S.p, ref sizeasserters);
+    dbg_print("Sig checked successfully!" : string $pre @public);
+}
+
+pub fn compute_fixpowers() -> list[list[UECPointNZ[@public]]] {
+    let G = UECPointNZ {
+        p: 0xAA87CA22BE8B05378EB1C71EF320AD746E1D3B628BA79B9859F741E082542A385502F25DBF55296C3A545E3872760AB7,
+        q: 0x3617DE4A96262C6F5D9E98BF9292DC29F8F41DBD289A147CE9DA3113B5F0B8C00A60B1CE1D7E819D7A431D7C90EA0E5F,
+    };
+    let rec H = for i in 0 .. 128 {
+        let rec Hr = for j in 0 .. 7 {
+            if (i == 0) {
+                if (j == 0) {
+                    G
+                } else {
+                    if (j == 1) {
+                        uec_dbl(G)
+                    } else {
+                        uec_add(Hr[j-1], G)
+                    }
+                }
+            } else {
+                if (j == 0) {
+                    uec_add(H[i-1][6], H[i-1][0])
+                } else {
+                    if (j == 1) {
+                        uec_dbl(Hr[0])
+                    } else {
+                        uec_add(Hr[j-1], Hr[0])
+                    }
+                }
+            }
+        };
+        Hr
+    };
+    H
+}

@@ -1,0 +1,151 @@
+/*
+ * Copyright 2024 Cybernetica AS
+ * 
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+use Std::*;
+
+pub fn sqr[N : Nat, $S, @D](x : uint[N] $S @D) -> uint[N] $S @D {
+  x * x
+}
+ 
+pub fn log2[@D](x : uint $pre @D) -> uint $pre @D {
+    if x <= 0 {
+        error("undefined" : string);
+        -1
+    } else if (x == 1) {
+        0
+    } else {
+        1 + log2(x / 2)
+    }
+}
+
+// Performs integer division, interpreting x and y as signed
+pub fn div_signed[N : Nat, @D]
+( x : uint[N] $pre @D
+, y : uint[N] $pre @D
+) -> uint[N] $pre @D
+where Field[N]
+{ let x_sign = x as uint >= N / 2
+; let y_sign = y as uint >= N / 2
+; let x_new = if (y_sign) { -x } else { x }
+; let y_new = if (y_sign) { -y } else { y }
+; let res = if (xor(x_sign, y_sign)) { -((-x_new + y_new - 1) / y_new) }
+  else { x_new / y_new }
+; res
+}
+
+fn sqrt_helper[@D](init : uint $pre @D, current : uint $pre @D) -> uint $pre @D {
+  let next = (current * current + init) / (2 * current);
+  if (current <= next) { current } else { sqrt_helper(init, next) }
+}
+
+pub fn sqrt[@D](x : uint $pre @D) -> uint $pre @D {
+  dbg_assert(x >= 0);
+  if (x <= 1) { x } else { sqrt_helper(x, x) }
+}
+
+pub fn gcd[N : Nat, @D](x : uint[N] $pre @D, y : uint[N] $pre @D) -> uint[N] $pre @D {
+  if (y == 0) { x }
+  else { gcd(y, x % y) }
+}
+
+unchecked eff * -> * -> * ! $S
+fn pow_pre_helper[$S, @D, N : Nat, M : Nat](a : uint[N] $S @D, m : uint[M] $pre @public) -> uint[N] $S @D {
+  let mn = m as uint;
+  if (mn == 0) { 1 }
+  else { 
+    let q = mn / 2;
+    let halfres = pow_pre_helper(a, q);
+    if (2 * q == mn) { halfres * halfres } else { halfres * halfres * a }
+  } 
+}
+
+unchecked eff * -> * -> * ! $S
+pub fn pow_pre[$S, @D, N : Nat, M : Nat](a : uint[N] $S @D, m : uint[M] $pre @public) -> uint[N] $S @D 
+where Field[N] {
+  if (post $S) {
+    if (@prover <= @D) { pow_pre_helper(a, m) }
+    else { wire { pow_pre_helper(a as $pre, m) } }
+  } else { pow_pre_helper(a, m) }
+}
+
+pub fn pow_pre_inf[@D, M : Nat](a : uint $pre @D, m : uint[M] $pre @public) -> uint $pre @D {
+  pow_pre_helper(a, m)
+}
+
+unchecked eff * -> * ! $S
+pub fn is_zero[$S, @D, N : Nat](x : uint[N] $S @D) -> bool[N] $S @D
+  where Field[N] {
+  if (post $S) {
+    let b = x as $pre == 0;
+    let bp = wire { b };
+    if (@prover <= @D) {
+      let w = if (b) { 0 } else { mod_div(1, x as $pre) };
+      let bu = 1 - bp as uint[N];
+      let wp = wire { w };
+      let xu = x * bu;
+      let xuw = xu * wp;
+      assert_zero(xu - x);
+      assert_zero(xuw - bu);
+    };
+    bp
+  } else { x == 0 }
+}
+
+unchecked eff * -> * -> * ! $S
+pub fn eq[$S, @D, N : Nat](x : uint[N] $S @D, y : uint[N] $S @D) -> bool[N] $S @D
+  where Field[N]
+{
+    if (post $S) { if (@D <= @verifier) { wire { x as $pre == y as $pre } } else { is_zero(x - y) }}
+    else { is_zero(x - y) }
+}
+
+pub fn neq[$S, @D, N : Nat](x : uint[N] $S @D, y : uint[N] $S @D) -> bool[N] $S @D
+    where Field[N]
+{
+    !eq(x, y)
+}
+
+pub fn max_pre[@D, N : Nat](x : uint[N] $pre @D, y : uint[N] $pre @D) -> uint[N] $pre @D {
+    if x > y { x } else { y }
+}
+
+pub fn min_pre[@D, N : Nat](x : uint[N] $pre @D, y : uint[N] $pre @D) -> uint[N] $pre @D {
+    if x < y { x } else { y }
+}
+
+// Assumes that x is either 0 or 1
+unchecked eff * -> * ! $S
+pub fn uint_to_bool[$S, @D, N : Nat](x : uint[N] $S @D) -> bool[N] $S @D 
+where Field[N] {
+  if (post $S) {
+    let b = wire { !(x as $pre == 0) };
+    if (@prover <= @D) { assert_zero(b as uint[N] - x); };
+    b
+  } else { !(x == 0) }
+}
+
+/**
+ * Modular division
+ */
+
+// Divides in residue ring
+unchecked eff * -> * -> * ! $S
+pub fn divide_modulo[$S, @D, N : Nat](x : uint[N] $S @D, y : uint[N] $S @D) -> uint[N] $S @D
+where Field[N]
+{ let r = uint_downcast(mod_div(x as $pre, y as $pre))
+; if (post $S) { if (@prover <= @D) { assert_zero(r * y - x) } } else {}
+; r
+}
+
+pub fn invert_modulo[$S, @D, N : Nat](x : uint[N] $S @D) -> uint[N] $S @D
+where Field[N]
+{ divide_modulo(1, x)
+}
+

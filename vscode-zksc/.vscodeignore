@@ -1,0 +1,5 @@
+**/*.ts
+**/tsconfig.json
+node_modules
+.gitignore
+README.md

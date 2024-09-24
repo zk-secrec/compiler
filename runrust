@@ -1,0 +1,309 @@
+#!/bin/bash
+
+set -e
+
+# Default values of options
+RELEASE="--release"
+CURR_DOMAIN=Prover
+NEED_REL=true
+DEBUG=true
+FLAMEGRAPH=false
+STORES_WITH_DEFAULT=false
+INTERACTIVE=false
+IR1=false
+EMP=false
+EMP_ADDR="127.0.0.1:12345"
+CHALLENGE_TCP=""
+LIBRARY_PATH=""
+RECOMPILE=true
+BIN=zksc-ir0plus
+
+# Option parsing
+ZKSC=""
+PUB=""
+INS=""
+WIT=""
+CIRC=""
+OUTPUT=""
+EXTERNS=""
+CCC=()
+PARAM_NO=0
+OPTIONS_FINISHED=0
+while [ "$#" -gt 0 ]; do
+    if [ $OPTIONS_FINISHED -eq 0 ]; then
+        case "$1" in
+            "--no-recompile")
+                RECOMPILE=false
+                shift
+                continue
+                ;;
+            "--flamegraph")
+                FLAMEGRAPH=true
+                shift
+                continue
+                ;;
+            "-d")
+                RELEASE=""
+                shift
+                continue
+                ;;
+            "-D")
+                RELEASE="--profile debug-opt"
+                shift
+                continue
+                ;;
+            "--prover")
+                CURR_DOMAIN=Prover
+                shift
+                continue
+                ;;
+            "--verifier")
+                CURR_DOMAIN=Verifier
+                shift
+                continue
+                ;;
+            "--public")
+                CURR_DOMAIN=Public
+                shift
+                continue
+                ;;
+            "--rel")
+                NEED_REL=true
+                shift
+                continue
+                ;;
+            "--no-rel")
+                NEED_REL=false
+                shift
+                continue
+                ;;
+            "--debug")
+                DEBUG=true
+                shift
+                continue
+                ;;
+            "--no-debug")
+                DEBUG=false
+                shift
+                continue
+                ;;
+            "--stores-default")
+                STORES_WITH_DEFAULT=true
+                shift
+                continue
+                ;;
+            "--no-stores-default")
+                STORES_WITH_DEFAULT=false
+                shift
+                continue
+                ;;
+            "--interactive")
+                INTERACTIVE=true
+                CHALLENGE_TCP="$2"
+                shift 2
+                continue
+                ;;
+            "--no-interactive")
+                INTERACTIVE=false
+                CHALLENGE_TCP=""
+                shift
+                continue
+                ;;
+            "--ir0plus")
+                BIN="zksc-ir0plus"
+                shift
+                continue
+                ;;
+            "--ir0+")
+                BIN="zksc-ir0plus"
+                shift
+                continue
+                ;;
+            "--emp")
+                BIN="zksc-emp"
+                shift
+                continue
+                ;;
+            "--dummy")
+                BIN="zksc-dummy"
+                shift
+                continue
+                ;;
+            "--emp-addr")
+                BIN="zksc-emp"
+                EMP_ADDR="$2"
+                shift 2
+                continue
+                ;;
+            "-p"|"--public")
+                PUB="$2"
+                shift 2
+                continue
+                ;;
+            "-i"|"--instance")
+                INS="$2"
+                shift 2
+                continue
+                ;;
+            "-w"|"--witness")
+                WIT="$2"
+                shift 2
+                continue
+                ;;
+            "-b"|"--circuit-path")
+                CIRC="$2"
+                shift 2
+                continue
+                ;;
+            "-c"|"--cfg")
+		CCC2=`realpath "$2"`
+		CCC=("$1" "$CCC2")
+                shift 2
+                continue
+                ;;
+            "-o"|"--output")
+                OUTPUT="$2"
+                shift 2
+                continue
+                ;;
+            "-L"|"--library-path")
+                LIBRARY_PATH="-L `realpath "$2"`"
+                shift 2
+                continue
+                ;;
+	    "-e"|"--externs")
+	        EXTERNS="$2"
+		shift 2
+		continue
+		;;
+            "--")
+                OPTIONS_FINISHED=1
+                shift
+                continue
+                ;;
+            *)
+                ;;
+        esac
+        if [ "`echo "$1" | head -c1`" = "-" ]; then
+            echo "Unknown flag: $1"
+            exit
+        fi
+    fi
+    PARAM_NO=$[$PARAM_NO + 1]
+    case $PARAM_NO in
+        1) ZKSC="$1" ;;
+        2) PUB="$1" ;;
+        3) INS="$1" ;;
+        4) WIT="$1" ;;
+        5) CIRC="$1" ;;
+        6) OUTPUT="$1" ;;
+        *) echo "Too many non-option arguments: argument $PARAM_NO is \"$1\""; exit ;;
+    esac
+    shift
+done
+
+if [ -z "$ZKSC" ]; then
+    echo "Usage: $0 [OPTIONS] FILE [public_json [instance_json [witness_json [circuits_dir [output_prefix]]]]]"
+    echo "This script must be executed in the compiler directory."
+    echo "If any of the jsons is empty or unneeded (e.g. for Verifier or Public) then it may be replaced with \"\"."
+    echo "If output_prefix is not \"\" then the output is to .rel/.ins/.wit/.0wit files with the given prefix."
+    echo "If output_prefix is \"\" then the output is standard output."
+    echo "OPTIONS can be both before or after other arguments or in the middle."
+    echo "The following OPTIONS are supported:"
+    echo "  -d                      Compile the Rust code with debuginfo and unoptimized."
+    echo "  -D                      Compile the Rust code with debuginfo and optimized (useful for debugging programs that run too long when unoptimized)."
+    echo "  --flamegraph            Compile the Rust code for profiling. See PROFILING.md for more details."
+    echo "  --prover                Compile as Prover (the default)."
+    echo "  --no-recompile          Do not compile ZKSC to rust. Useful for manually changing generated Rust code."
+    echo "  --verifier              Compile as Verifier (witness_json is not needed and may be replaced with \"\")."
+    echo "  --public                Compile as Public (instance_json and witness_json are not needed and may be replaced with \"\")."
+    echo "  --rel                   Generate the .rel-file (the default)."
+    echo "  --no-rel                Do not generate the .rel-file (may be a bit faster). It still generates the .ins/.wit/.0wit files that the current party can generate."
+    echo "  --debug                 Include the output of dbg_print, etc."
+    echo "  --no-debug              Do not include the output of dbg_print, etc."
+    echo "  --stores-default        Reading values with missing keys returns the default value 0 instead of failing."
+    echo "  --no-stores-default     Reading values with missing keys fails (the default behavior)."
+    echo "  --ir0plus               Use IR0+ output."
+    echo "  --emp                   Use EMP backend instead of IR."
+    echo "  --emp-addr ADDR:PORT    Set EMP backend address and port when using remotely. This also sets --emp to be true."
+    echo "  --interactive ADDR:PORT Use interactive proofs (needed for challenges from verifier to prover). The argument is the address and port (e.g. 127.0.0.1:12350) for the TCP connection for sending challenges."
+    echo "  -L|--library-path DIR   Library search path."
+    echo "  -c|--cfg FILE           CCC input file."
+    echo "  -e|--externs FILE       Specify the Rust file where extern functions are found."
+    echo "The following can be given either as options or as non-option parameters:"
+    echo "  -p|--public FILE      (or 2nd non-option parameter) Public JSON input file."
+    echo "  -i|--instance FILE    (or 3rd non-option parameter) Instance JSON input file."
+    echo "  -w|--witness FILE     (or 4th non-option parameter) Witness JSON input file."
+    echo "  -b|--circuit-path DIR (or 5th non-option parameter) Bristol circuit search path."
+    echo "  -o|--output FILE      (or 6th non-option parameter) Output path, prefix of the .rel/.ins/.wit/.0wit files."
+    exit
+fi
+
+TMPCONSTS=`mktemp` || exit 1
+trap 'rm -f ${TMPCONSTS}' EXIT
+
+if [ -n "$EXTERNS" ]; then
+    cmp -s "$EXTERNS" src/Rust/zksc-app-lib/src/externs.rs ||
+	cat "$EXTERNS" > src/Rust/zksc-app-lib/src/externs.rs
+else
+    cmp -s "${TMPCONSTS}" src/Rust/zksc-app-lib/src/externs.rs ||
+	echo -n > src/Rust/zksc-app-lib/src/externs.rs
+fi
+
+cat > "${TMPCONSTS}" << END
+// This file is automatically generated by the script runrust.
+use crate::zksc_types::*;
+pub const CURR_DOMAIN: DomainType = $CURR_DOMAIN;
+pub const NEED_REL: bool = $NEED_REL;
+pub const STORES_WITH_DEFAULT: bool = $STORES_WITH_DEFAULT;
+pub const INTERACTIVE: bool = $INTERACTIVE;
+pub const IR1: bool = $IR1;
+pub const EMP: bool = $EMP;
+pub const EMP_ADDRESS : &str = "$EMP_ADDR";
+pub const CHALLENGE_TCP: &str = "$CHALLENGE_TCP";
+END
+
+# If files are identical don't update the timestamp.
+# Speeds up rust if we keep everything as is as much as possible
+cmp -s ${TMPCONSTS} src/Rust/zksc-app-lib/src/consts.rs ||
+    mv ${TMPCONSTS} src/Rust/zksc-app-lib/src/consts.rs || exit 1
+
+if [ "$RECOMPILE" = true ];
+then
+    ZKSCTMPFILE=`mktemp` || exit 1
+    trap 'rm -f ${ZKSCTMPFILE}' EXIT
+    stack exec zkscc -- "$ZKSC" $LIBRARY_PATH "${CCC[@]}" -o ${ZKSCTMPFILE} ||
+        (echo "ERROR: Compilation '${ZKSC}' failed" && exit 1)
+    [ -s ${ZKSCTMPFILE} ] ||
+        (echo "ERROR: Compiler generated empty .zksc file" && exit 1)
+    cmp -s ${ZKSCTMPFILE} src/Rust/zksc-app-lib/src/generated.rs ||
+        mv ${ZKSCTMPFILE} src/Rust/zksc-app-lib/src/generated.rs || exit 1
+else
+    echo "WARNING. Skipped compiling $ZKSC file."
+fi
+
+PUB=`(if [ -z "$PUB" ]; then echo -n ""; else realpath "$PUB"; fi)`
+INS=`(if [ -z "$INS" ]; then echo -n ""; else realpath "$INS"; fi)`
+WIT=`(if [ -z "$WIT" ]; then echo -n ""; else realpath "$WIT"; fi)`
+CIRC=`(if [ -z "$CIRC" ]; then echo -n ""; else realpath "$CIRC"; fi)`
+OUTPUT=`(if [ -z "$OUTPUT" ]; then echo -n ""; else realpath "$OUTPUT"; fi)`
+
+if [ "$BIN" = "zksc-emp" ] ;
+then
+    export EMP_BACKEND=true
+fi
+
+FEATURES=""
+if [ "$DEBUG" = "true" ]
+then
+    FEATURES="--features zksc_debug"
+fi
+
+cd src/Rust/ || exit 1
+
+if [ "$FLAMEGRAPH" = true ] ;
+then
+    cargo flamegraph $FEATURES --bin $BIN -- "$PUB" "$INS" "$WIT" "$CIRC" "$OUTPUT" || exit 1
+else
+    cargo run $RELEASE $FEATURES --bin $BIN -- "$PUB" "$INS" "$WIT" "$CIRC" "$OUTPUT" || exit 1
+fi

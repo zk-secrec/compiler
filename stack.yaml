@@ -1,0 +1,17 @@
+resolver: lts-18.24
+
+packages:
+  - .
+  - sieveir
+
+extra-deps:
+  - flatbuffers-0.3.0.0
+  - lsp-1.2.0.0
+  - lsp-types-1.2.0.0
+  - lsp-test-0.14.0.0
+  - dependent-map-0.4.0.0
+  - dependent-sum-0.7.1.0
+  - dependent-sum-template-0.1.0.3
+  - unliftio-core-0.2.0.1
+  - constraints-0.12
+  - constraints-extras-0.3.1.0

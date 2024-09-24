@@ -1,0 +1,128 @@
+/*
+ * Copyright 2024 Cybernetica AS
+ * 
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+use Std::*;
+use Integer::*; // pow_pre
+
+pub type bitarray[$S, @D, N : Nat] : Qualified = list[bool[N] $S @D] $pre @public;
+
+pub fn bytextract_pre[@D, N : Nat]
+( x : uint[N] $pre @D
+, byt_width : u64 $pre @public
+, byt_val : uint $pre @public
+) -> list[uint[N] $pre @D]
+{ let bc = byt_val as uint[N] as @D
+; let rec xx = for i in 0 .. byt_width 
+  { if (i == 0) { x } else { xx[i - 1] / bc }
+  }
+; for i in 0 .. byt_width { xx[i] % bc }
+}
+
+pub fn byts_to_uint[N : Nat, $S, @D]
+( byts : list[uint[N] $S @D]
+, byt_val : uint $pre @public
+) -> uint[N] $S @D 
+where Field[N]
+{ let bw = length(byts)
+; let byt_val_dc = uint_downcast(byt_val as uint[N]) as @D
+; let rec partialsums = for i in 0 .. bw
+  { if (i == 0) { byts[bw - 1] }
+    else { partialsums[i - 1] * byt_val_dc + byts[bw - i - 1] }
+  }
+; partialsums[bw - 1]
+}
+
+pub fn bitextract_pre[@D, N : Nat]
+( x : uint[N] $pre @D
+, bw : u64 $pre @public
+) -> bitarray[$pre, @D, N]
+{ let uintbits = bytextract_pre(x, bw, 2)
+; for i in 0 .. bw { uintbits[i] != 0 }
+}
+
+pub fn bits_to_uint[N : Nat, $S, @D]
+( bits : bitarray[$S, @D, N]
+) -> uint[N] $S @D 
+where Field[N]
+{ let uintbits = for i in 0 .. length(bits) { bits[i] as uint[N] }
+; byts_to_uint(uintbits, 2)
+}
+
+pub fn bytes_to_uints[$S, @D, N : Nat]
+( bytes : list[bitarray[$S, @D, N]]
+) -> list[uint[N] $S @D] 
+where Field[N]
+{ for i in 0 .. length(bytes) { bits_to_uint(bytes[i]) }
+}
+
+fn check_bitextract[@D, N : Nat]
+( x : uint[N] $post @D
+, xb : bitarray[$post, @D, N]
+) 
+where Field[N]
+{ let bw = length(xb)
+; let mone : uint[N] $pre @public = -1
+; dbg_assert(bw != 0)
+; dbg_assert(pow_pre_inf(2, bw) <= mone as uint)
+; let y = bits_to_uint(xb)
+; assert_zero(x - y)
+}
+
+unchecked eff * -> * -> [*] ! $S
+pub fn bitextract[$S, @D, N : Nat]
+( x : uint[N] $S @D
+, bw : u64 $pre @public
+) -> bitarray[$S, @D, N] 
+where Field[N]
+{ if (post $S) 
+  { let xb = bool_list_to_post(bitextract_pre(x as $pre, bw))
+  ; if (@prover <= @D) { check_bitextract(x, xb) }
+  ; xb
+  } else { bitextract_pre(x, bw) }
+}
+
+pub fn bitextract_list[@D, N : Nat]
+( xs : list[uint[N] $post @D]
+, bw : u64 $pre @public
+) -> list[bitarray[$post, @D, N]] 
+where Field[N]
+{ for i in 0 .. length(xs) { bitextract(xs[i], bw) }
+}
+
+/**
+ * Power with $post exponent
+ */
+
+pub fn pow'[$S, @D, N : Nat]
+( g : uint[N] $S @D
+, e : bitarray[$S, @D, N]
+, ebw : u64 $pre @public
+) -> uint[N] $S @D 
+{ let rec res = for i in 0 .. ebw 
+  { let bit = e[ebw - i - 1] as uint[N]
+  ; let oneorg = 1 - bit + bit * g
+  ; if i == 0 { oneorg } else 
+    { let a = res[i - 1]
+    ; a * a * oneorg
+    }
+  }
+; res[ebw - 1]
+}
+
+pub fn pow[$S, @D, N : Nat]
+( g : uint[N] $S @D
+, e : uint[N] $S @D
+, ebw : u64 $pre @public
+) -> uint[N] $S @D 
+where Field[N]
+{ let ebits = bitextract(e, ebw)
+; pow'(g, ebits, ebw)
+}
+

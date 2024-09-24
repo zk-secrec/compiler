@@ -1,0 +1,651 @@
+/*
+ * Copyright 2024 Cybernetica AS
+ * 
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+use Std::*;
+use Integer::*;
+use Waksman::*;
+use Bitextract::*;
+use Inequalities::*;
+
+struct BigIntBlock[N : Nat, $S, @D] {
+  v : uint[N] $S @D,
+  bound : uint $pre @public,
+}
+
+pub struct BigInt[N : Nat, $S, @D] {
+  blocks : list[BigIntBlock[N, $S, @D]],
+  bpb : u64 $pre @public,
+}
+
+fn BigIntBlock_to_string[N : Nat, $S, @D](x : BigIntBlock[N, $S, @D]) -> string $pre @D {
+  let xval0 = x.v as $pre as uint;
+  let xval = if (xval0 > N/2) { xval0 - N } else { xval0 };
+  ((("BigIntBlock { v: " ++ to_string(xval)) ++ ", bound: ") ++ to_string(x.bound as @D)) ++ " }"
+}
+
+// Gives a debuggable string representation of the BigInt.
+pub fn BigInt_to_string[N : Nat, $S, @D](x : BigInt[N, $S, @D]) -> string $pre @D {
+  let rec blocks = for i in 0 .. length(x.blocks) + 1 {
+    if (i == 0) { "" }
+    else { ((blocks[i - 1] ++ "\n    ") ++ BigIntBlock_to_string((x.blocks)[i - 1])) ++ "," }
+  };
+  ((("BigInt {\n  blocks: [" ++ blocks[length(x.blocks)]) ++ "\n  ],\n  bpb: ") ++ to_string(x.bpb as @D)) ++ "\n}"
+}
+
+// Converts a BigInt to uint
+pub fn BigInt_to_uint[N : Nat, $S, @D](x : BigInt[N, $S, @D]) -> uint $pre @D {
+  let bpb_max : uint $pre @public = pow_pre_inf(2, x.bpb);
+  let mid = (N / (2 : uint $pre @D)) as uint[N];
+  let vs = for i in 0 .. length(x.blocks) {
+    let v = x.blocks[i].v as $pre;
+    if (v < mid) { v as uint } else { -((-v) as uint) }
+  };
+  let rec pows = for i in 0 .. length(x.blocks) {
+    if (i == 0) { 1 }
+    else { pows[i - 1] * bpb_max }
+  };
+  scalar_prod(vs, for i in 0 .. length(x.blocks) { pows[i] as @D }, length(x.blocks))
+}
+
+// Creates a BigInt from an uint. The second argument is the number of blocks allocated for
+// storing the value. Third argument is bits-per-block.
+pub fn BigInt_from_uint[N : Nat, @D](x : uint $pre @D, nblocks : u64 $pre @public, bpb : u64 $pre @public) -> BigInt[N, $pre, @D] {
+  // Enough bits for one multiplication
+  let bpb_max : uint $pre @public = pow_pre_inf(2, bpb);
+  let rec vals = for i in 0 .. nblocks { 
+    if (i == 0) { if (x > 0) { x } else { -x } }
+    else { vals[i - 1] / bpb_max as @D }
+  };
+  BigInt {
+    blocks: for i in 0 .. nblocks {
+      BigIntBlock {
+        v: (vals[i] % bpb_max as @D) as uint[N] * if (x > 0) { 1 } else { -1 },
+        bound: bpb_max - 1,
+      }
+    },
+    bpb: bpb,
+  }
+}
+
+// Creates a BigInt from an uint. The second argument is the number of blocks allocated for
+// storing the value. Third argument is bits-per-block.
+// Fourth argument is either 0 or 1. The result is either 0 or x
+pub fn BigInt_from_uint_select[N : Nat, @D](x : uint $pre @public, nblocks : u64 $pre @public, bpb : u64 $pre @public, sel : uint[N] $post @D) -> BigInt[N, $post, @D] where Field[N] {
+  // Enough bits for one multiplication
+  let bpb_max : uint $pre @public = pow_pre_inf(2, bpb);
+  let rec vals = for i in 0 .. nblocks {
+    if (i == 0) { if (x > 0) { x } else { -x } }
+    else { vals[i - 1] / bpb_max }
+  };
+  BigInt {
+    blocks: for i in 0 .. nblocks {
+      BigIntBlock {
+        v: ((wire { (vals[i] % bpb_max) as uint[N] * if (x > 0) { 1 } else { -1 } }) as @D) * sel,
+        bound: bpb_max - 1,
+      }
+    },
+    bpb: bpb,
+  }
+}
+
+// Adds blocks to the BigInt until it has at least `l` blocks
+fn BigInt_extend[N : Nat, $S, @D](x : BigInt[N, $S, @D], l : u64 $pre @public) -> BigInt[N, $S, @D] {
+  BigInt {
+    blocks: for i in 0..max_pre(l, length(x.blocks)) {
+      if i < length(x.blocks) {
+        x.blocks[i]
+      } else {
+        BigIntBlock {
+          v: 0,
+          bound: 0,
+        }
+      }
+    },
+    bpb: x.bpb,
+  }
+}
+
+// Adds two BigInts.
+// The result is not normalized
+pub fn BigInt_add[N : Nat, $S, @D](x : BigInt[N, $S, @D], y : BigInt[N, $S, @D]) -> BigInt[N, $S, @D] {
+//  dbg_print("adding" : string);
+//  dbg_print("x: " ++ BigInt_to_string(x));
+//  dbg_print("y: " ++ BigInt_to_string(y));
+  dbg_assert(x.bpb == y.bpb);
+  let x = BigInt_extend(x, length(y.blocks));
+  let y = BigInt_extend(y, length(x.blocks));
+//  dbg_assert(length(x.blocks) == length(y.blocks));
+  let blocks = for i in 0..length(x.blocks) {
+    let bound = x.blocks[i].bound + y.blocks[i].bound;
+    dbg_assert(bound < N / 2);
+    BigIntBlock {
+      v: x.blocks[i].v + y.blocks[i].v,
+      bound: bound,
+    }
+  };
+  BigInt {
+    blocks: blocks,
+    bpb: x.bpb,
+  }
+}
+
+// Subtracts `y` from `x`.
+// The result is not normalized
+pub fn BigInt_sub[N : Nat, $S, @D](x : BigInt[N, $S, @D], y : BigInt[N, $S, @D]) -> BigInt[N, $S, @D] {
+  dbg_assert(x.bpb == y.bpb);
+  let x = BigInt_extend(x, length(y.blocks));
+  let y = BigInt_extend(y, length(x.blocks));
+//  dbg_assert(length(x.blocks) == length(y.blocks));
+  let blocks = for i in 0..length(x.blocks) {
+    let bound = x.blocks[i].bound + y.blocks[i].bound;
+    dbg_assert(bound < N / 2);
+    BigIntBlock {
+      v: x.blocks[i].v - y.blocks[i].v,
+      bound: bound,
+    }
+  };
+  BigInt {
+    blocks: blocks,
+    bpb: x.bpb,
+  }
+}
+
+pub fn BigInt_neg[N : Nat, $S, @D](x : BigInt[N, $S, @D]) -> BigInt[N, $S, @D] {
+    BigInt {
+        blocks : for i in 0 .. length(x.blocks) {
+            BigIntBlock {
+                v : -x.blocks[i].v,
+                bound : x.blocks[i].bound
+            }
+        },
+        bpb : x.bpb
+    }
+}
+
+pub fn BigInt_constmul[N : Nat, @D](c : uint $pre @public, x : BigInt[N, $post, @D]) -> BigInt[N, $post, @D] where Field[N] {
+    let cwire = (wire { c as uint[N] }) as @D;
+    BigInt {
+        blocks : for i in 0 .. length(x.blocks) {
+            BigIntBlock {
+                v : x.blocks[i].v * cwire,
+                bound : x.blocks[i].bound * c
+            }
+        },
+        bpb : x.bpb
+    }
+}
+
+// Check if any of the blocks is out of bounds
+fn BigInt_is_oob[N : Nat, $S, @D](x : BigInt[N, $S, @D]) -> bool $pre @public {
+  let mut res = false;
+  for i in 0..length(x.blocks) {
+    if(x.blocks[i].bound >= N / 2){
+      res = true;
+    }
+  }
+  res
+}
+
+// Multiplies two BigInts
+// The result is not normalized
+pub fn BigInt_mul[N : Nat, $S, @D](x : BigInt[N, $S, @D], y : BigInt[N, $S, @D]) -> BigInt[N, $S, @D] {
+  dbg_assert(x.bpb == y.bpb);
+  // Check the bounds and normalize if necessary
+
+  let res_blocks = for i in 0 .. length(x.blocks) + length(y.blocks) - 1 {
+    let a = max_pre(i + 1, length(y.blocks)) - length(y.blocks);
+    let b = min_pre(length(x.blocks), i + 1);
+    let xyvs = for j in a .. b { x.blocks[j].v * y.blocks[i - j].v };
+    let xybounds = for j in a .. b { x.blocks[j].bound * y.blocks[i - j].bound };
+    BigIntBlock {
+      v: sum(xyvs),
+      bound: sum(xybounds),
+    }
+  };
+  let res = BigInt {
+    blocks: res_blocks,
+    bpb: x.bpb
+  };
+  //dbg_print("mul_res: " ++ BigInt_to_string(res));
+  res
+}
+
+// Brings a BitIntBlock to $post stage.
+pub fn BigIntBlock_to_post[N : Nat, @D](x : BigIntBlock[N, $pre, @D]) -> BigIntBlock[N, $post, @D] where Field[N] {
+  BigIntBlock {
+    v: wire{x.v},
+    bound: x.bound,
+  }
+}
+
+// Brings a BitInt to $post stage (works like `wire` on primitives).
+pub fn BigInt_to_post[N : Nat, @D](x : BigInt[N, $pre, @D]) -> BigInt[N, $post, @D] where Field[N] {
+  BigInt {
+    blocks: for i in 0..length(x.blocks) { BigIntBlock_to_post(x.blocks[i]) },
+    bpb: x.bpb,
+  }
+}
+
+// Casts a BigIntBlock to $pre stage.
+pub fn BigIntBlock_to_pre[N : Nat, @D](x : BigIntBlock[N, $post, @D]) -> BigIntBlock[N, $pre, @D] {
+  BigIntBlock {
+    v: x.v as $pre,
+    bound: x.bound,
+  }
+}
+
+// Casts a BigInt to $pre stage.
+pub fn BigInt_to_pre[N : Nat, @D](x : BigInt[N, $post, @D]) -> BigInt[N, $pre, @D] {
+  BigInt {
+    blocks: for i in 0..length(x.blocks) { BigIntBlock_to_pre(x.blocks[i]) },
+    bpb: x.bpb,
+  }
+}
+
+// Casts a BigIntBlock from one domain to another
+fn BigIntBlock_cast[N : Nat, $S, @D1, @D2](x : BigIntBlock[N, $S, @D1]) -> BigIntBlock[N, $S, @D2]
+  where @D1 <= @D2
+{
+  BigIntBlock {
+    v: x.v as @D2,
+    bound: x.bound
+  }
+}
+
+// Casts a BigInt from one domain to another
+pub fn BigInt_cast[N : Nat, $S, @D1, @D2](x : BigInt[N, $S, @D1]) -> BigInt[N, $S, @D2]
+  where @D1 <= @D2
+{
+  BigInt {
+    blocks: for i in 0..length(x.blocks) {BigIntBlock_cast(x.blocks[i])},
+    bpb: x.bpb
+  }
+}
+
+// Multiplies two BigInts in $post
+// The result is not normalized
+pub fn BigInt_mul_post[N:Nat,@D](x : BigInt[N,$post,@D], y : BigInt[N,$post,@D]) -> BigInt[N,$post,@D] where Field[N] {
+  let res : BigInt[N, $post, @D] = BigInt_to_post(BigInt_mul(BigInt_to_pre(x), BigInt_to_pre(y)));
+  for i in 0 .. length(x.blocks)+length(y.blocks)-1 {
+    let mut s1 = 0;
+    let mut s2 = 0;
+    let mut s = 0;
+    let rec ipows_pre : list[uint[N] $pre @public] = for j in 0 .. length(res.blocks) {
+        if(j == 0) {
+            1 : uint[N] $pre @public
+        }
+        else {
+            (i as uint[N]) * ipows_pre[j - 1]
+        }
+    };
+    let ipows : list[uint[N] $post @public] = uint_list_to_post(ipows_pre);
+    for j in 0 .. length(x.blocks) {
+      s1 = s1 + x.blocks[j].v as @D * (ipows[j] as @D)
+    };
+    for j in 0 .. length(y.blocks) {
+      s2 = s2 + y.blocks[j].v as @D * (ipows[j] as @D)
+    };
+    for j in 0 .. length(res.blocks) {
+      s = s + res.blocks[j].v as @D * (ipows[j] as @D)
+    };
+    //dbg_print("s1: " ++ to_string(s1 as $pre));
+    //dbg_print("s2: " ++ to_string(s2 as $pre));
+    //dbg_print("s1 * s2: " ++ to_string((s1 * s2) as $pre));
+    //dbg_print("s: " ++ to_string(s as $pre));
+    assert_zero(s1 * s2 - s);
+  }
+//  let nres = BigInt_normalize_post(res);
+  //dbg_print("res: " ++ BigInt_to_string(res));
+  //dbg_print("res: " ++ to_string(BigInt_to_uint(res)));
+  res
+}
+
+fn least_blocks_of_uint(p : uint $pre @public, bpb : u64 $pre @public) -> u64 $pre @public {
+    let ppos = if(p < 0) { -p } else { p };
+    field_bit_width(ppos) / bpb + 1
+}
+
+// Calculates the bit width of a BigInt.
+pub fn BigInt_bit_width[N:Nat, @D](x : BigInt[N, $post, @D]) -> u64 $pre @public {
+  length(x.blocks) * x.bpb
+}
+
+pub fn BigInt_assert_normalization[N: Nat, @D](x : BigInt[N, $post, @D], ref sizeasserters : list[SizeAsserter[N, $post, @D]]) 
+where Field[N] {
+    let uint_val = BigInt_to_uint(x);
+    let isPos : bool $pre @D = (uint_val >= 0);
+    let mkPos : uint[N] $pre @D = if (isPos) { 1 } else { -1 };
+    let mkPosPost = wire { mkPos };
+    assert_zero(mkPosPost * mkPosPost - 1);
+    for i in 0 .. length(x.blocks) {
+        let blaah = check_size(x.blocks[i].v * mkPosPost, ref sizeasserters[x.bpb]);
+    };
+}
+
+// The result is normalized (with proof)
+pub fn BigInt_normalize_post[N : Nat, @D](x : BigInt[N, $post, @D], ref sizeasserters : list[SizeAsserter[N, $post, @D]]) -> BigInt[N, $post, @D] 
+where Field[N] {
+    let bpb_max : uint[N] $pre @public = pow_pre(2, x.bpb as uint[N]);
+    let bpb_maxu = bpb_max as uint;
+    let uint_val = BigInt_to_uint(x);
+    let isPos : bool $pre @D = (uint_val >= 0);
+    let mkPos : uint $pre @D = if (isPos) { 1 } else { -1 };
+    let bpb_max_post = (wire { bpb_max }) as @D;
+
+    let mut allbound = 0;
+    let mut mult_bound_with = 1;
+    for i in 0 .. length(x.blocks) {
+        allbound = allbound + mult_bound_with * x.blocks[i].bound;
+        mult_bound_with = mult_bound_with * bpb_maxu;
+    };
+    let norm_num_blocks = (field_bit_width(allbound) + x.bpb - 1) / x.bpb;
+    //dbg_print("norm_num_blocks = " ++ to_string(norm_num_blocks));
+    let xnn = BigInt_extend(x, norm_num_blocks);
+
+    let mut differences : list[uint $pre @D]  = for i in 0 .. norm_num_blocks - 1 { 0 };
+    let mut diff_ok_bounds : list[uint $pre @public] = for i in 0 .. norm_num_blocks - 1 { 0 };
+    let mut incoming_val = 0;
+    let res_blocks = for i in 0 .. norm_num_blocks {
+        if( i == norm_num_blocks - 1) {
+            let currblock0 = xnn.blocks[i].v as $pre as uint;
+            let currblock = (if (currblock0 < N/2) { currblock0 } else { currblock0 - N }) + incoming_val;
+            currblock
+        }
+        else {
+            diff_ok_bounds[i] = 1 + (xnn.blocks[i].bound + (if (i == 0) { 0 } else {diff_ok_bounds[i-1]})) / bpb_maxu;
+            let currblock0 = xnn.blocks[i].v as $pre as uint;
+            let currblock = (if (currblock0 < N/2) { currblock0 } else { currblock0 - N }) + incoming_val;
+            let posblock = mkPos * currblock;
+            let num_times_remove = mkPos * (posblock / (bpb_maxu as @D));
+            differences[i] = num_times_remove;
+            incoming_val = num_times_remove;
+            currblock - num_times_remove * (bpb_maxu as @D)
+        }
+    };
+    let difs_post = for i in 0 .. norm_num_blocks - 1 { wire { differences[i] as uint[N] } };
+    let mkPosPost = wire { mkPos as uint[N] };
+    assert_zero(mkPosPost * mkPosPost - 1);
+    let blocks_out = for i in 0 .. norm_num_blocks {
+        BigIntBlock {
+            v : wire { res_blocks[i] as uint[N] },
+            bound : bpb_maxu - 1,
+        }
+    };
+
+    if(norm_num_blocks > 1) {
+      assert_zero(xnn.blocks[0].v - bpb_max_post * difs_post[0] - blocks_out[0].v);
+      for i in 0 .. norm_num_blocks-2 {
+          assert_zero( xnn.blocks[i+1].v + difs_post[i] - bpb_max_post * difs_post[i+1] - blocks_out[i+1].v );
+      }
+      assert_zero(xnn.blocks[norm_num_blocks-1].v + difs_post[norm_num_blocks-2] - blocks_out[norm_num_blocks-1].v);
+    }
+    else {
+      assert_zero(xnn.blocks[0].v - blocks_out[0].v);
+    }
+
+    for i in 0 .. norm_num_blocks {
+        let blaah = check_size(blocks_out[i].v * mkPosPost, ref sizeasserters[x.bpb]); 
+    }
+
+    for i in 0 .. norm_num_blocks - 1 {
+        let mkDifPos_pre : uint[N] $pre @D = if(differences[i] < 0) { -1 } else { 1 };
+        let mkDifPos = wire { mkDifPos_pre };
+        let diff_bw = field_bit_width(diff_ok_bounds[i]+1);
+        assert_zero(mkDifPos * mkDifPos - 1);
+        let blaah = check_size(difs_post[i] * mkDifPos, ref sizeasserters[diff_bw]);
+    }
+
+    BigInt {
+        blocks : blocks_out,
+        bpb : x.bpb,
+    }
+}
+
+// Tests if a BigInt is zero
+// Assumes normal form
+pub fn BigInt_is_zero[N : Nat, @D]
+( xn : BigInt[N, $post, @D]
+) -> bool[N] $post @D
+where Field[N]
+{ all(for i in 0 .. length(xn.blocks) { is_zero(xn.blocks[i].v) })
+}
+
+// Asserts that a BigInt is zero
+// Assumes normal form
+pub fn BigInt_assert_zero[N : Nat, @D]
+( xn : BigInt[N, $post, @D]
+)
+where Field[N]
+{ for i in 0 .. length(xn.blocks) { assert_zero(xn.blocks[i].v) }
+;
+}
+
+// Asserts that a BigInt is non-negative
+// Assumes normal form
+pub fn BigInt_assert_nonneg[N : Nat, @D]
+( xn : BigInt[N, $post, @D]
+, ref sizeasserters : list[SizeAsserter[N, $post, @D]]
+) 
+where Field[N]
+{ for i in 0 .. length(xn.blocks) 
+  { let trash = check_size(xn.blocks[i].v, ref sizeasserters[xn.bpb]) 
+  ;
+  }
+; 
+}
+
+// Tests if two BigInts are equal
+pub fn BigInt_eq[N : Nat, @D]
+( x : BigInt[N, $post, @D]
+, y : BigInt[N, $post, @D]
+, ref sizeasserters : list[SizeAsserter[N, $post, @D]]
+) -> bool[N] $post @D
+where Field[N]
+{ let diff = BigInt_normalize_post(BigInt_sub(y, x), ref sizeasserters)
+; BigInt_is_zero(diff)
+}
+
+// Asserts that two BigInts are equal
+pub fn BigInt_assert_eq[N : Nat, @D]
+( x : BigInt[N, $post, @D]
+, y : BigInt[N, $post, @D]
+, ref sizeasserters : list[SizeAsserter[N, $post, @D]]
+)
+where Field[N]
+{ let diff = BigInt_normalize_post(BigInt_sub(y, x), ref sizeasserters)
+; BigInt_assert_zero(diff)
+}
+
+// Asserts one BigInt being less than or equal to another BigInt
+pub fn BigInt_assert_le[N : Nat, @D]
+( x : BigInt[N, $post, @D]
+, y : BigInt[N, $post, @D]
+, ref sizeasserters : list[SizeAsserter[N, $post, @D]]
+)
+where Field[N]
+{ let diff = BigInt_normalize_post(BigInt_sub(y, x), ref sizeasserters)
+; BigInt_assert_nonneg(diff, ref sizeasserters)
+}
+
+// Asserts one BigInt being less than another BigInt
+pub fn BigInt_assert_lt[N : Nat, @D]
+( x : BigInt[N, $post, @D]
+, y : BigInt[N, $post, @D]
+, ref sizeasserters : list[SizeAsserter[N, $post, @D]]
+)
+where Field[N]
+{ let diff = BigInt_normalize_post(BigInt_sub(y, x), ref sizeasserters)
+; BigInt_assert_nonneg(diff, ref sizeasserters)
+; assert(!BigInt_is_zero(diff))
+}
+
+// Returns x % y.
+// The result is normalized
+pub fn BigInt_mod[N:Nat, @D](x : BigInt[N, $post, @D], y : BigInt[N, $post, @D], ref sizeasserters : list[SizeAsserter[N, $post, @D]]) -> BigInt[N, $post, @D] 
+where Field[N] {
+  dbg_assert(x.bpb == y.bpb);
+  let xi = BigInt_to_uint(x);
+  let yi = BigInt_to_uint(y);
+  let p = xi/yi;
+  let q = xi - p * yi;
+  let bi_p = BigInt_to_post(BigInt_from_uint(p, length(x.blocks), x.bpb));
+  let bi_q = BigInt_normalize_post(BigInt_to_post(BigInt_from_uint(q, length(y.blocks), y.bpb)), ref sizeasserters);
+  BigInt_assert_eq(BigInt_add(BigInt_mul(bi_p, y), bi_q), x, ref sizeasserters);
+  BigInt_assert_nonneg(bi_q, ref sizeasserters);
+  BigInt_assert_lt(bi_q, y, ref sizeasserters);
+  bi_q
+}
+
+// The result is normalized
+pub fn BigInt_modconst[N:Nat, @D](x : BigInt[N, $post, @D], y : uint $pre @public, ref sizeasserters : list[SizeAsserter[N, $post, @D]]) -> BigInt[N, $post, @D] 
+where Field[N] {
+  let xi = BigInt_to_uint(x);
+  let p = xi/ (y as @D);
+  let q = xi - p * (y as @D);
+  let bi_p = BigInt_to_post(BigInt_from_uint(p, length(x.blocks), x.bpb));
+  let bi_q = BigInt_normalize_post(BigInt_to_post(BigInt_from_uint(q, least_blocks_of_uint(y, x.bpb), x.bpb)), ref sizeasserters);
+  let yb : BigInt[N, $post, @D] = BigInt_cast(BigInt_to_post(BigInt_from_uint(y, length(bi_q.blocks), x.bpb)));
+  BigInt_assert_eq(BigInt_add(BigInt_mul(bi_p, yb), bi_q), x, ref sizeasserters);
+  BigInt_assert_nonneg(bi_q, ref sizeasserters);
+  BigInt_assert_lt(bi_q, yb, ref sizeasserters);
+  bi_q
+}
+
+// Returns a BigInt `z` such that z * x = y (mod p).
+// The result is normalized (without proof)
+pub fn BigInt_mod_div[N : Nat, @D](
+  y : BigInt[N, $post, @D],
+  x : BigInt[N, $post, @D],
+  p : uint $pre @public,
+  ref sizeasserters : list[SizeAsserter[N, $post, @D]]
+) -> BigInt[N, $post, @D] 
+where Field[N] {
+  let xi : uint $pre @D = BigInt_to_uint(x);
+  let yi : uint $pre @D = BigInt_to_uint(y);
+  let mod : uint $pre @D = (yi * __mod_invert(xi % (p as @D), p as @D)) % (p as @D);
+  let res : BigInt[N, $post, @D] = BigInt_to_post(BigInt_from_uint(mod, least_blocks_of_uint(p, y.bpb), y.bpb));
+  BigInt_assert_eq(
+    BigInt_modconst(BigInt_sub(BigInt_mul(res, x), y), p, ref sizeasserters),
+    BigInt_cast(BigInt_to_post(BigInt_from_uint(0 : uint $pre @public, 1, y.bpb))),
+    ref sizeasserters
+  );
+  res
+}
+
+// Result is generally not normalized. If both inputs are normalized, then so is the result. Provenness also carries over
+pub fn BigInt_choose[N : Nat, $S, @D](b : uint[N] $S @D, t : BigInt[N, $S, @D], f : BigInt[N, $S, @D]) -> BigInt[N, $S, @D] {
+    dbg_assert(t.bpb == f.bpb);
+    let tm = BigInt_extend(t, length(f.blocks));
+    let fm = BigInt_extend(f, length(t.blocks));
+    let nblocks = for i in 0 .. length(tm.blocks) {
+        BigIntBlock {
+            v : fm.blocks[i].v + b * (tm.blocks[i].v - fm.blocks[i].v),
+            bound : max_pre(tm.blocks[i].bound, fm.blocks[i].bound)
+        }
+    };
+    BigInt {
+        blocks : nblocks,
+        bpb : t.bpb
+    }
+}
+
+// Result is generally not normalized. If both inputs are normalized, then so is the result. Provenness also carries over
+pub fn BigInt_conditional_swap[N : Nat, $S, @D](b : bool[N] $S @D, t : BigInt[N, $S, @D], f : BigInt[N, $S, @D]) -> tuple[BigInt[N, $S, @D], BigInt[N, $S, @D]] {
+    dbg_assert(t.bpb == f.bpb);
+    let tm = BigInt_extend(t, length(f.blocks));
+    let fm = BigInt_extend(f, length(t.blocks));
+    let nblocks = for i in 0 .. length(tm.blocks) {
+        BigIntBlock {
+            v : tm.blocks[i].v + b as uint[N] * (fm.blocks[i].v - tm.blocks[i].v),
+            bound : max_pre(tm.blocks[i].bound, fm.blocks[i].bound)
+        }
+    };
+    let mblocks = for i in 0 .. length(tm.blocks) {
+        BigIntBlock {
+            v : fm.blocks[i].v + tm.blocks[i].v - nblocks[i].v,
+            bound : nblocks[i].bound
+        }
+    };
+    (BigInt {
+        blocks : nblocks,
+        bpb : t.bpb
+    },
+    BigInt {
+        blocks : mblocks,
+        bpb : t.bpb
+    })
+}
+
+// Takes a list of booleans and returns a BigInt which is represented by these bits
+// It assumes little-endian input now (previously it assumed big-endian)
+pub fn BigInt_from_bitarray[N : Nat, @D](bs : list[bool[N] $post @D], bpb : u64 $pre @public) -> BigInt[N, $post, @D] 
+where Field[N] {
+  let no_blocks = (length(bs) + bpb - 1) / bpb;
+  let last_block_size = length(bs) % bpb;
+  BigInt {
+    blocks: for i in 0 .. no_blocks {
+      let block_size = if (i < no_blocks - 1 | last_block_size == 0) { bpb } else { last_block_size };
+      let block = for j in 0 .. block_size { bs[i * bpb + j] };
+      BigIntBlock {
+        v: bits_to_uint(block),
+        bound: pow_pre_inf(2, block_size) - 1
+      }
+    },
+    bpb: bpb
+  }
+}
+
+// This function will be required by assert_checksig in EC.zksc when --ir1e is used.
+// It takes bool[2]'s as input instead of bool[N]'s.
+// bs must have least significant bit first, as required by the @assert_equal directive in Experimental SIEVE IR.
+pub fn BigInt_from_bool2_array[N : Nat, @D](bs : list[bool[2] $post @D], bpb : u64 $pre @public) -> BigInt[N, $post, @D] 
+where Field[N], Convertible[2,N] {
+  BigInt_from_bitarray(for i in 0 .. length(bs) { bs[i] as bool[N] }, bpb)
+}
+
+// Input must be non-negative and normalized (will check this)
+pub fn BigInt_to_bitarray[N : Nat, @D](x : BigInt[N, $post, @D]) -> list[bool[N] $post @D] 
+where Field[N] {
+    let bpb_max : uint $pre @public = pow_pre_inf(2, x.bpb);
+    concat(for i in 0 .. length(x.blocks) {
+        dbg_assert(x.blocks[i].bound + 1 == bpb_max);
+        bitextract(x.blocks[i].v, x.bpb)
+    })
+}
+
+/*
+/****
+ * Old code; does not work because of some mysterious effect error
+ *
+ */
+
+fn apply_switching_network_BigInt_instance[N : Nat, @D](gblnum : u64, gbpb : u64)
+  -> ApplySwitchingNetworkInterface[BigInt[N, $post, @D], N, @D]
+  where Field[N]
+{
+  ApplySwitchingNetworkInterface {
+    init: BigInt_to_post(BigInt_from_uint(0, gblnum, gbpb)),
+    cond_swap: fn (b) { BigInt_conditional_swap(b) },
+  }
+}
+
+pub fn apply_switching_network_BigInt[N : Nat, @D](x : list[BigInt[N, $post, @D]], netDesc : list[u64 $pre @public], switches : list[bool[N] $post @D]) -> list[BigInt[N, $post, @D]] where Field[N] {
+  let ll = length(x);
+  for i in 1 .. ll {
+    dbg_assert(length(x[0].blocks) == length(x[i].blocks));
+    dbg_assert(x[0].bpb == x[i].bpb);
+  };
+
+  let gbpb = if ll > 0 { x[0].bpb } else { 26 };
+  let gblnum = if ll > 0 { length(x[0].blocks) } else { 15 };
+  apply_switching_network_generic(x, netDesc, switches, apply_switching_network_BigInt_instance(gblnum, gbpb))
+}
+
+*/

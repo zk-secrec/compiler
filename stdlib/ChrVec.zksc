@@ -1,0 +1,62 @@
+use Std::*;
+use Integer::*;
+
+// Assumes that the length of c is less than N
+pub fn check_chrvec[N : Nat, $S, @D](c : list[bool[N] $S @D])
+  where Field[N] {
+  univ_assert_zero(sum(bool_list_to_uint(c)) - 1);
+}
+ 
+// Assumes that N is prime
+// If i >= n then the result consists of falses only
+pub fn chrvec[N : Nat, $S, @D]
+( n : u64 $pre @public
+, ind : uint[N] $S @D
+) -> list[bool[N] $S @D]
+where Field[N] 
+{ for i in 0 .. n 
+  { let i_dc = (uint_downcast(i as uint[N])) as @D
+  ; is_zero(ind - i_dc)
+  }
+}
+
+pub fn chrvec_list_pre[N : Nat,@D](n : u64 $pre @D, is : list[uint[N] $pre @D] $pre @D) -> list[bool[N] $pre @D] $pre @D {
+  let mut res = [false; n];
+  for i in 0 .. length(is) { res[is[i] as u64] = true };
+  res
+}
+
+// Assumes that N is prime
+pub fn chrvec_lt[N : Nat, $S, @D](n : u64 $pre @public, ind : uint[N] $S @D) -> list[bool[N] $S @D] 
+  where Field[N] {
+  let cv = chrvec(n, ind);
+  let rec res = for i in 0 .. n {
+    if (i == 0) { !cv[i] }
+    else { res[i - 1] & !cv[i] }
+  };
+  res
+}
+   
+fn shift[N : Nat,$S,@D](ref x : list[bool[N] $S @D]) {
+  let n = length(x);
+  for i in 1 .. length(x) { x[n - i] = x[n - i - 1]; }
+  x[0] = false;
+}
+ 
+// Assumes that N is prime
+pub fn segment[N : Nat, $S, @D](text : list[uint[N] $S @D], ind : uint[N] $S @D, m : u64 $pre @public) -> list[uint[N] $S @D]
+  where Field[N] {
+  let n = length(text);
+  let mut c = chrvec(n, ind);
+  for j in 0 .. m {
+    let h = scalar_prod(text, bool_list_to_uint(c), n);
+    if (j < m - 1) { shift(ref c) } else { check_chrvec(c) };
+    h
+  }  
+}
+
+// Assumes that N is prime
+pub fn element[N : Nat, $S, @D](text : list[uint[N] $S @D], ind : uint[N] $S @D) -> uint[N] $S @D
+  where Field[N] {
+  segment(text, ind, 1)[0]
+}

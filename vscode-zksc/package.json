@@ -1,0 +1,106 @@
+{
+  "private": true,
+  "name": "zk-secrec",
+  "description": "ZK-SecreC Visual Studio Code extension",
+  "author": "Cybernetica AS",
+  "publisher": "cybernetica",
+  "version": "1.0.0",
+  "repository": {},
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "language",
+    "zk-secrec",
+    "lsp"
+  ],
+  "engines": {
+    "vscode": "^1.52.0"
+  },
+  "activationEvents": [
+    "onLanguage:zk-secrec"
+  ],
+  "main": "./out/extension",
+  "contributes": {
+    "languages": [
+      {
+        "id": "zk-secrec",
+        "aliases": [
+          "ZK-SecreC",
+          "zk-secrec"
+        ],
+        "extensions": [
+          ".zksc"
+        ]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "zk-secrec",
+        "scopeName": "source.zk-secrec",
+        "path": "./zk-secrec.tmGrammar.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "ZK-SecreC configuration",
+      "properties": {
+        "zk-secrec.serverPath": {
+          "scope": "machine",
+          "type": "string",
+          "default": "",
+          "description": "Path to ZK-SecreC language server executable."
+        },
+        "zk-secrec.trace.server": {
+          "scope": "machine",
+          "type": "string",
+          "enum": [
+            "off",
+            "messages"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the language server."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "zk-secrec.commands.restartServer",
+        "title": "ZK-SecreC: Restart ZK-SecreC language server",
+        "description": "Restart ZK-SecreC language server"
+      },
+      {
+        "command": "zk-secrec.commands.startServer",
+        "title": "ZK-SecreC: Start ZK-SecreC language server",
+        "description": "Start ZK-SecreC language server"
+      },
+      {
+        "command": "zk-secrec.commands.stopServer",
+        "title": "ZK-SecreC: Stop ZK-SecreC language server",
+        "description": "Stop ZK-SecreC language server"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "webpack --mode production",
+    "webpack": "webpack --mode development",
+    "watch": "webpack --mode development --watch",
+    "compile": "tsc -b",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "12.12.0",
+    "@types/vscode": "1.52.0",
+    "@typescript-eslint/eslint-plugin": "4.23.0",
+    "@typescript-eslint/parser": "4.23.0",
+    "eslint": "7.26.0",
+    "ts-loader": "9.2.1",
+    "typescript": "4.2.3",
+    "vsce": "^2.11.0",
+    "webpack": "5.37.1",
+    "webpack-cli": "4.7.0"
+  }
+}

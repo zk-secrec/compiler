@@ -1,0 +1,25 @@
+[package]
+name = "zksc-app-lib"
+description = "Backend agnostic support library for ZKSC compiler generated code."
+version = "0.3.0"
+rust = "1.60"
+edition = "2021"
+
+[dependencies]
+log = "0.4"
+serde_json = "1.0"
+modinverse = "0.1"
+num-bigint = { version = "0.4", default-features = false }
+once_cell = "1.19.0"
+num-integer = "0.1"
+num-traits = "0.2"
+crypto-bigint = "0.4.8"
+rand = { version = "0.8", optional = true }
+thiserror = "1.0"
+
+[features]
+default = ["oob_challenge", "command_line", "panic_on_zksc_assert"]
+oob_challenge = ["dep:rand", "num-bigint/rand"]
+command_line = []
+zksc_debug = []
+panic_on_zksc_assert = []

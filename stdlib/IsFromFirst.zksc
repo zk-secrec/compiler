@@ -1,0 +1,451 @@
+/*
+ * Copyright 2024 Cybernetica AS
+ * 
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+use Std::*;
+use Integer::*;
+use ChrVec::*;
+use Perm::*;
+use Prob::*;
+use Bitextract::*;
+use Inequalities::*;
+use String::*;
+
+fn is_equal_to_previous[N : Nat, $S, @D](xb : list[uint[N] $S @D]) -> list[bool[N] $S @D]
+where Field[N]
+{ for i in 0 .. length(xb) 
+  { if (i == 0) { false } 
+    else { eq(xb[i - 1], xb[i]) }
+  }
+}
+
+fn mem[N : Nat, @D](x : uint[N] $pre @D, l : list[uint[N] $pre @D], i : u64 $pre @public) -> uint[N] $pre @D {
+    if (i >= length(l)) { 0 }
+    else if (l[i] == x) { 1 }
+    else { mem(x, l, i + 1) }
+}
+
+fn is_from_first_pre[N : Nat](x : list[uint[N] $pre @verifier], y : list[uint[N] $pre @prover]) -> list[uint[N] $pre @prover] {
+    let x_prover = uint_list_to_prover(x);
+    for i in 0 .. length(x) + length(y) {
+        if (i < length(x)) {
+            1
+        }
+        else {
+            mem(y[i - length(x)], x_prover, 0)
+        }
+    }
+}
+
+pub fn is_from_first[N : Nat](x : list[uint[N] $post @verifier], y : list[uint[N] $post @prover], ref sizeasserter : SizeAsserter[N, $post, @prover]) -> list[bool[N] $post @prover] 
+  where Field[N], Challenge[N] {
+    let result = uint_list_to_post(is_from_first_pre(uint_list_to_pre(x), uint_list_to_pre(y)));
+    let all_values = append(uint_list_to_prover(x), y);
+    let sort_perm = __get_sorting_permutation(for i in 0 .. length(all_values) { all_values[i] as $pre as uint });
+    
+    let is_val_from_first = uint_list_to_prover(uint_list_to_post(append([(1 : uint[N] $pre @public); length(x)], [(0 : uint[N] $pre @public); length(y)])));
+    let zs = apply_perm([all_values, is_val_from_first, result], sort_perm);
+    let sorted_all_values = zs[0];
+    let sorted_val_from_first = zs[1];
+    let sorted_good_val_other = zs[2];
+
+    assert_sorted(sorted_all_values, ref sizeasserter);
+    let equal_values = bool_list_to_uint(is_equal_to_previous(sorted_all_values));
+    
+    let rec sorted_good_val =
+      for i in 0 .. length(x) + length(y) {
+        if (i == 0) {
+          sorted_val_from_first[0]
+        } else {
+          equal_values[i] * sorted_good_val[i - 1] + (1 - equal_values[i]) * sorted_val_from_first[i]
+        }
+      };
+    for i in 1 .. length(x) + length(y) { // Check that indeed, (equal) values from instance were sorted before values from witness
+      assert_zero(equal_values[i] * (1 - sorted_val_from_first[i - 1]) * sorted_val_from_first[i]);
+    };
+    for i in 0 .. length(sorted_good_val) {
+      assert_zero(sorted_good_val[i] - sorted_good_val_other[i]);
+    };
+    for i in 0 .. length(result) { uint_to_bool(result[i]) }
+}
+
+// Assumes 8-bit characters
+fn string_is_from_first_helper[N : Nat](instances : list[String[$post, @verifier, N]], witnesses : list[String[$post, @prover, N]], r : uint[N] $post @verifier, ref sizeasserter : SizeAsserter[N, $post, @prover]) -> list[bool[N] $post @prover]
+where Field[N], Challenge[N]
+{ let instance_codes = for i in 0 .. length(instances) 
+  { eval_string(instances[i], r) 
+  }
+; let witness_codes = for i in 0 .. length(witnesses) 
+  { eval_string(witnesses[i], r as @prover) 
+  }
+; is_from_first(instance_codes, witness_codes, ref sizeasserter)
+}
+
+// Assumes 8-bit characters
+pub fn string_is_from_first[N : Nat](instances : list[String[$post, @verifier, N]], witnesses : list[String[$post, @prover, N]], ref sizeasserter : SizeAsserter[N, $post, @prover]) -> list[bool[N] $post @prover]
+where Field[N], Challenge[N]
+{ let num_instances = length(instances)
+; let num_witnesses = length(witnesses)
+; let results = string_is_from_first_helper(instances, witnesses, 256, ref sizeasserter)
+; for i in 0 .. num_instances + num_witnesses
+  { if (i < num_instances) { true }
+    else { results[i] }
+  }
+}
+
+// Assumes 8-bit characters
+pub fn is_prefixed_by_last[N : Nat, $S, @D](xs : list[uint[N] $S @D], lens : list[uint[N] $S @D], maxlen : u64 $pre @public) -> list[bool[N] $S @D]
+where Field[N]
+{ let bw = 8 * maxlen
+; let ebw = log2(maxlen as uint) as u64 + 1
+; let m = uint_downcast(maxlen as uint[N]) as @D
+; let zs = for i in 0 .. length(xs) 
+  { xs[i] * pow'(256, bitextract(m - lens[i], ebw), ebw) 
+  }
+; let zsbits = for i in 0 .. length(zs) { bitextract(zs[i], bw) }
+; for i in 0 .. length(zs)
+  { if (i == 0) { false }
+    else
+    { let diffbits = reverse(for j in 0 .. bw { zsbits[i][j] as uint[N] - zsbits[i - 1][j] as uint[N] })
+    ; let dbits = for j in 0 .. bw { diffbits[j] * diffbits[j] }
+    ; let chrvec = chrvec_lt(bw, 8 * lens[i - 1])
+    ; is_zero(scalar_prod(dbits, bool_list_to_uint(chrvec), bw))
+    }
+  }
+}
+
+// Assumes 8-bit characters
+unchecked eff [*] -> [*] -> [*] -> [*] -> * -> [*,*,[*]] -> [*] ! @public
+fn is_prefixed_from_first_helper[N : Nat, $S](xs : list[uint[N] $S @verifier], ys : list[uint[N] $S @prover], xlens : list[uint[N] $S @verifier], ylens : list[uint[N] $S @prover], maxlen : u64 $pre @public, ref sizeasserter : SizeAsserter[N, $post, @prover]) -> list[uint[N] $S @prover]
+where Field[N], Challenge[N]
+{ let all_vals = append(uint_list_to_prover(xs), ys)
+; let all_lens = append(uint_list_to_prover(xlens), ylens)
+; let sort_perm = __get_sorting_permutation(for i in 0 .. length(all_vals) { all_vals[i] as $pre as uint })
+; let is_val_from_first = uint_list_to_prover(append([(1 : uint[N] $S @public); length(xs)], [(0 : uint[N] $S @public); length(ys)]))
+; let mut result = for i in 0 .. length(xs) + length(ys) { 0 }
+; let mut zs : list[list[uint[N] $S @prover]] = for k in 0 .. 4 { result }
+; if (post $S)
+  { result = uint_list_to_post(is_prefixed_from_first_helper(uint_list_to_pre(xs), uint_list_to_pre(ys), uint_list_to_pre(xlens), uint_list_to_pre(ylens), maxlen, ref sizeasserter))
+  ; zs = apply_perm([all_vals, all_lens, is_val_from_first, result], sort_perm)
+  } else
+  { let idxs = for i in 0 .. length(xs) + length(ys) { i as uint[N] as @prover }
+  ; zs = apply_perm([all_vals, all_lens, is_val_from_first, idxs], sort_perm)
+  }
+; let sorted_all_vals = zs[0]
+; let sorted_all_lens = zs[1]
+; let sorted_is_val_from_first = zs[2]
+; let equal_values = bool_list_to_uint(is_equal_to_previous(sorted_all_vals))
+; let prefal_values = bool_list_to_uint(is_prefixed_by_last(sorted_all_vals, sorted_all_lens, maxlen))
+; if (post $S)
+  { let sorted_good_vals_other = zs[3]
+  ; let rec sorted_good_vals = for i in 0 .. length(xs) + length(ys)
+    { if (i == 0) { sorted_is_val_from_first[0] } 
+      else 
+      { let flag = prefal_values[i] * sorted_is_val_from_first[i - 1]
+      ; flag * sorted_good_vals[i - 1] + (1 - flag) * sorted_is_val_from_first[i] 
+      }
+    }
+  ; assert_sorted(sorted_all_vals, ref sizeasserter) // Check sortedness
+  ; for i in 1 .. length(xs) + length(ys) // Check that indeed, (equal) values from instance were sorted before values from witness
+    { assert_zero(equal_values[i] * (1 - sorted_is_val_from_first[i - 1]) * sorted_is_val_from_first[i])
+    }
+  ; for i in 0 .. length(sorted_good_vals)
+    { assert_zero(sorted_good_vals[i] - sorted_good_vals_other[i])
+    }
+  ;
+  } else
+  { let sorted_idxs = zs[3]
+  ; let mut good_vals : list[uint[N] $pre @prover] $pre @prover = is_val_from_first as @prover
+  ; for i in 1 .. length(xs) + length(ys)
+    { if (prefal_values[i] * sorted_is_val_from_first[i - 1] == 1) { good_vals[sorted_idxs[i] as u64] = good_vals[sorted_idxs[i - 1] as u64] }
+    }
+  ; result = for i in 0 .. length(xs) + length(ys) { good_vals[i as @prover] }
+  }
+; result
+}
+
+// Assumes 8-bit characters
+unchecked eff [*] -> [*] -> [*] -> [*] -> * -> [*,*,[*]] -> [*] ! @public
+pub fn is_prefixed_from_first[N : Nat](xs : list[uint[N] $post @verifier], ys : list[uint[N] $post @prover], xlens : list[uint[N] $post @verifier], ylens : list[uint[N] $post @prover], maxlen : u64 $pre @public, ref sizeasserter : SizeAsserter[N, $post, @prover]) -> list[bool[N] $post @prover]
+where Field[N], Challenge[N]
+{ /*
+  dbg_print("xs:" : string $pre @public)
+; for i in 0 .. length(xs) { dbg_print(to_string(xs[i] as $pre)) }
+; dbg_print("ys:" : string $pre @public)
+; for i in 0 .. length(ys) { dbg_print(to_string(ys[i] as $pre)) }
+; dbg_print("xlens:" : string $pre @public)
+; for i in 0 .. length(xlens) { dbg_print(to_string(xlens[i] as $pre)) }
+; dbg_print("ylens:" : string $pre @public)
+; for i in 0 .. length(ylens) { dbg_print(to_string(ylens[i] as $pre)) }
+; dbg_print("maxlen: " ++ to_string(maxlen))
+; */
+  let result = is_prefixed_from_first_helper(xs, ys, xlens, ylens, maxlen, ref sizeasserter)
+; for i in 0 .. length(result) { uint_to_bool(result[i]) }
+}
+
+/**
+ * The old version of IsFromFirst that does not use challenges
+ *
+ */
+/*
+use String::*;
+use Integer::*;
+use Waksman::*;
+use Ec::*;
+use BigInt::*;
+use Std::*;
+
+fn check_sorted[N : Nat, @D](xb : list[list[bool[N] $post @D]], bw : uint $pre @public) {
+    for i in 1 .. length(xb) {
+        assert(le'(xb[i-1], xb[i], bw));
+    };
+}
+
+pub fn is_from_first[N : Nat](x : list[uint[N] $post @verifier],
+                              y : list[uint[N] $post @prover]) -> list[bool[N] $post @prover] where Field[N] {
+    let bw = 56;
+    let permNetwork = make_waksman_network(length(x) + length(y));
+    let allValues = append(uint_list_to_prover(x), y);
+    let permSws : list[bool[N] $post @prover] = get_switches_for_sorting(uint_list_to_pre(allValues));
+    let sortedAllValues_uint = apply_switching_network_uint(allValues, permNetwork, permSws);
+    assert(is_sorted(sortedAllValues_uint, bw));
+    let equalValues = is_equal_to_previous(sortedAllValues_uint);
+    let is_val_from_first : list[bool[N] $post @prover] = bool_list_to_prover(bool_list_to_post(append([(true : bool[N] $pre @public); length(x)], [(false : bool[N] $pre @public); length(y)])));
+    let sortedValFromFirst = apply_switching_network_bool(is_val_from_first, permNetwork, permSws);
+    let rec sortedGoodVal =
+        for i in 0 .. length(x) + length(y) {
+            if (i == 0) {
+                sortedValFromFirst[0]
+            }
+            else {
+                (equalValues[i] & sortedGoodVal[i-1]) | ((!equalValues[i]) & sortedValFromFirst[i])
+            }
+        };
+    for i in 1 .. length(x) + length(y) { // Check that indeed, (equal) values from instance were sorted before values from witness
+        let b = (!equalValues[i]) | (!sortedValFromFirst[i]) | sortedValFromFirst[i-1];
+        dbg_assert(b as $pre);
+        assert(b);
+    }
+    let result = bool_list_to_post(is_from_first_pre(uint_list_to_pre(x), uint_list_to_pre(y)));
+    let sortedGoodDr_other = apply_switching_network_bool(result, permNetwork, permSws);
+    for i in 0 .. length(sortedGoodVal) {
+        let b = (sortedGoodVal[i] & sortedGoodDr_other[i]) | (!sortedGoodVal[i] & !sortedGoodDr_other[i]);
+        dbg_assert(b as $pre);
+        assert(b);
+    }
+    dbg_print("is_from_first: x = " : string $pre @public);
+    for i in 0 .. length(x) { dbg_print(to_string(x[i] as $pre)) }
+    dbg_print("is_from_first: y = " : string $pre @public);
+    for i in 0 .. length(y) { dbg_print(to_string(y[i] as $pre)) }
+    dbg_print("is_from_first: result = " : string $pre @public);
+    for i in 0 .. length(result) { dbg_print(to_string(result[i] as $pre)) }
+    result
+}
+
+pub fn is_from_first_with_public_key[N : Nat](
+  x : list[uint[N] $post @verifier],
+  y : list[uint[N] $post @prover],
+  xpk : list[PublicKey[N, $post, @verifier]],
+  ypk : list[PublicKey[N, $post, @prover]]) -> list[bool[N] $post @prover]
+    where Field[N]
+{
+    let bw = 32;
+    let permNetwork : list[uint $pre @public] = make_waksman_network(length(x) + length(y));
+    let allValues = append(uint_list_to_prover(x), y);
+    let permSws : list[bool[N] $post @prover] = get_switches_for_sorting(uint_list_to_pre(allValues));
+    let sortedAllValues_uint = apply_switching_network_uint(allValues, permNetwork, permSws);
+    assert(is_sorted(sortedAllValues_uint, bw));
+    let equalValues = is_equal_to_previous(sortedAllValues_uint);
+    let is_val_from_first : list[bool[N] $post @prover] = bool_list_to_prover(bool_list_to_post(append([(true : bool[N] $pre @public); length(x)], [(false : bool[N] $pre @public); length(y)])));
+    let sortedValFromFirst = apply_switching_network_bool(is_val_from_first, permNetwork, permSws);
+
+    // Extra check starts here
+    // Extra check: make sure that the public keys have the same equality pattern as doctors' IDs
+    let xpkfst = for i in 0 .. length(xpk) { (xpk[i]).p };
+    let xpksnd = for i in 0 .. length(xpk) { (xpk[i]).q };
+    let ypkfst = for i in 0 .. length(ypk) { (ypk[i]).p };
+    let ypksnd = for i in 0 .. length(ypk) { (ypk[i]).q };
+    let allpkfst = append(big_int_list_to_prover(xpkfst), ypkfst);
+    let allpksnd = append(big_int_list_to_prover(xpksnd), ypksnd);
+    let permSws_in_P : list[bool[N] $post @prover] = convert_bitarray(permSws);
+    let sortedpkfst_uint = applySwitchingNetworkBigInt(allpkfst, permNetwork, permSws_in_P);
+    let sortedpksnd_uint = applySwitchingNetworkBigInt(allpksnd, permNetwork, permSws_in_P);
+    //let equalvaluespkfst = is_equal_to_previous(sortedpkfst_uint);
+    //let equalvaluespksnd = is_equal_to_previous(sortedpksnd_uint);
+    //for i in 0 .. length(equalValues) {
+    //  assert_eq(equalvaluespkfst[i] & equalvaluespksnd[i], equalValues[i]);
+    //}
+    //// Extra check ends here
+
+    let rec sortedGoodVal =
+        for i in 0 .. length(x) + length(y) {
+            if (i == 0) {
+                sortedValFromFirst[0]
+            }
+            else {
+                (equalValues[i] & sortedGoodVal[i-1]) | ((!equalValues[i]) & sortedValFromFirst[i])
+            }
+        };
+    for i in 1 .. length(x) + length(y) { // Check that indeed, (equal) values from instance were sorted before values from witness
+        let b = (!equalValues[i]) | (!sortedValFromFirst[i]) | sortedValFromFirst[i-1];
+        dbg_assert(b as $pre);
+        assert(b);
+    }
+    let result = bool_list_to_post(is_from_first_pre(uint_list_to_pre(x), uint_list_to_pre(y)));
+    let sortedGoodDr_other = apply_switching_network_bool(result, permNetwork, permSws);
+    for i in 0 .. length(sortedGoodVal) {
+        let b = (sortedGoodVal[i] & sortedGoodDr_other[i]) | (!sortedGoodVal[i] & !sortedGoodDr_other[i]);
+        dbg_assert(b as $pre);
+        assert(b);
+    }
+    result
+}
+
+fn big_int_list_to_prover[N : Nat, @D](x : list[BigInt[N, $post, @D]]) -> list[BigInt[N, $post, @prover]] {
+  for i in 0 .. length(x) { BigInt_cast(x[i]) }
+}
+
+fn is_equal_to_previous[N : Nat, @D](xb : list[uint[N] $post @D] $pre) -> list[bool[N] $post @D] where Field[N] {
+    if (@D <= @verifier) {
+        for i in 0 .. length(xb) {
+            if (i==0) {
+                false
+            } else {
+                wire { (xb[i-1] as $pre) == (xb[i] as $pre) }
+            }
+        }
+    } else {
+        for i in 0 .. length(xb) {
+            if (i==0) {
+                false
+            } else {
+                is_zero(xb[i] - xb[i-1])
+            }
+        }
+    }
+}
+
+fn mem[N : Nat, @D](x : uint[N] $pre @D, l : list[uint[N] $pre @D]) -> bool[N] $pre @D {
+    let rec t = for i in 0 .. length(l)+1 {
+        if (i == 0) {
+            false
+        } else {
+            t[i-1] | (x == l[i-1])
+        }
+    };
+    t[length(l)]
+}
+
+fn is_from_first_pre[N : Nat](x : list[uint[N] $pre @verifier], y : list[uint[N] $pre @prover]) -> list[bool[N] $pre @prover] {
+    let x_prover = uint_list_to_prover(x);
+    for i in 0 .. length(x) + length(y) {
+        if (i < length(x)) {
+            true
+        }
+        else {
+            mem(y[i - length(x)], x_prover)
+        }
+    }
+}
+
+// check equality up until the number of bytes
+pub fn is_prefixed_from_first[N : Nat](x : list[uint[N] $post @verifier],
+                                       y : list[uint[N] $post @prover]) -> list[bool[N] $post @prover]
+    where Field[N]
+{
+    let bw = 56;
+    let permNetwork = make_waksman_network(length(x) + length(y));
+    let allValues = append(uint_list_to_prover(x), y);
+    let permSws = get_switches_for_sorting(uint_list_to_pre(allValues));
+    let sortedAllValues_uint = apply_switching_network_uint(allValues, permNetwork, permSws);
+    assert(is_sorted(sortedAllValues_uint, bw));
+
+    let is_val_from_first : list[bool[N] $post @prover] = bool_list_to_prover(bool_list_to_post(append([(true : bool[N] $pre @public); length(x)], [(false : bool[N] $pre @public); length(y)])));
+    let sortedValFromFirst = apply_switching_network_bool(is_val_from_first, permNetwork, permSws);
+    let equalValues = are_string_prefixed_by_last(sortedAllValues_uint, sortedValFromFirst);
+    let rec sortedGoodVal =
+        for i in 0 .. length(x) + length(y) {
+            if (i == 0) {
+                sortedValFromFirst[0]
+            }
+            else {
+                (equalValues[i] & sortedGoodVal[i-1]) | ((!equalValues[i]) & sortedValFromFirst[i])
+            }
+        };
+    for i in 1 .. length(x) + length(y) { // Check that indeed, (equal) values from instance were sorted before values from witness
+        let b = (!equalValues[i]) | (!sortedValFromFirst[i]) | sortedValFromFirst[i-1];
+        //dbg_assert(b as $pre);
+        //assert(b);
+    }
+    let result = bool_list_to_post(areStringsPrefixedByAny(uint_list_to_pre(x), uint_list_to_pre(y)));
+    let sortedGoodVal_other = apply_switching_network_bool(result, permNetwork, permSws);
+    for i in 0 .. length(sortedGoodVal) {
+        let b = (sortedGoodVal[i] & sortedGoodVal_other[i]) | (!sortedGoodVal[i] & !sortedGoodVal_other[i]);
+        dbg_assert(b as $pre);
+        assert(b);
+    }
+    dbg_print("is_prefixed_from_first: x = " : string $pre @public);
+    for i in 0 .. length(x) { dbg_print(to_string(x[i] as $pre)) }
+    dbg_print("is_prefixed_from_first: y = " : string $pre @public);
+    for i in 0 .. length(y) { dbg_print(to_string(y[i] as $pre)) }
+    dbg_print("is_prefixed_from_first: result = " : string $pre @public);
+    for i in 0 .. length(result) { dbg_print(to_string(result[i] as $pre)) }
+    result
+}
+
+pub fn areStringsPrefixedByAny[N : Nat](prefixes : list[uint[N] $pre @verifier], xs : list[uint[N] $pre @prover]) -> list[bool[N] $pre @prover] where Field[N] {
+    let prefixesProver : list[uint[N] $pre @prover] = uint_list_to_prover(prefixes);
+    for i in 0 .. length(prefixes) + length(xs) {
+        if (i < length(prefixes)) {
+            true
+        } else {
+            let rec l = for j in 0 .. length(prefixes) + 1 {
+                if (j == 0) { false }
+                else {
+                    l[j-1] | string_eq_up_to_len_pre(uint_to_string(prefixesProver[j-1], 7),
+                                                     uint_to_string(xs[i - length(prefixes)], 7))
+                }
+            };
+            l[length(prefixes)]
+        }
+    }
+}
+
+pub fn are_string_prefixed_by_last[N : Nat](x : list[uint[N] $post @prover], fromFirst : list[bool[N] $post @prover]) -> list[bool[N] $post @prover] where Field[N] {
+    let stringMaxLen : uint $pre @public = 7; // todo parametrize
+    let xStrings : list[String[$post, @prover, N]] =
+        for i in 0 .. length(x) { uint_to_string(x[i], stringMaxLen) };
+    let mut lastLength : uint[N] $post @prover = xStrings[0].len;
+    let result : list[bool[N] $post @prover] =
+        for i in 0..length(x) {
+            if (i == 0) { false }
+            else {
+                let currentFromFirst : uint[N] $post @prover = fromFirst[i] as uint[N];
+                lastLength =
+                    lastLength - lastLength * currentFromFirst + xStrings[i].len * currentFromFirst;
+                let r = string_eq_up_to_len(xStrings[i-1], xStrings[i], lastLength);
+                dbg_print(to_string(lastLength as $pre));
+                r
+            }
+        };
+    result
+}
+
+pub fn string_eq_up_to_len_pre[@D, N : Nat](x : String[$pre, @D, N], y : String[$pre, @D, N]) -> bool[N] $pre @D {
+    let rec equalUpTo : list[bool[N] $pre @D] =
+        for i in 0..length(x.chars) + 1 {
+            if (i == 0) { true }
+            else {
+                if (i as @D as uint[N] > x.len) { equalUpTo[i - 1] }
+                else { equalUpTo[i - 1] & x.chars[i - 1] == y.chars[i - 1] }
+            }
+        };
+    equalUpTo[length(x.chars)]
+}
+*/
