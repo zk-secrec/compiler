@@ -11,7 +11,7 @@ RUN cmake -DCMAKE_INSTALL_PREFIX=/emp-wrapper . && make
 #---
 FROM haskell:8.10.7-buster AS zkscc-builder
 WORKDIR /zksc
-COPY Setup.hs stack.yaml stack.yaml.lock zkscc.cabal ./
+COPY Setup.hs stack.yaml zkscc.cabal ./
 COPY sieveir/stack.yaml sieveir/sieveir.cabal /zksc/sieveir/
 RUN stack build --system-ghc --dependencies-only
 COPY compiler compiler/
@@ -21,6 +21,7 @@ COPY src src/
 COPY test test/
 COPY stdlib stdlib/
 COPY circuits circuits/
+COPY ymlgen ymlgen/
 RUN stack build --system-ghc --ghc-options=-O2 zkscc && \
     stack install
 #---
