@@ -1,0 +1,14 @@
+[package]
+name = "zksc-circom"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zksc-app-lib = { path = "../zksc-app-lib/" }
+log = "0.4"
+simple_logger = "2.3"
+num-traits = "0.2"
+
+[features]
+default = []
+zksc_debug = ["zksc-app-lib/zksc_debug"]

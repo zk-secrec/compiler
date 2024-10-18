@@ -3,7 +3,7 @@ cargo-features = ["named-profiles"]
 # This is to make sure that rust-analyzer finds the rust subproject
 # cargo commands can be executed either here on in the said subproject
 [workspace]
-members = [ "src/Rust/zksc-app-lib/", "src/Rust/zksc-emp/", "src/Rust/zksc-ir0plus/", "src/Rust/zksc-dummy"]
+members = [ "src/Rust/zksc-app-lib/", "src/Rust/zksc-emp/", "src/Rust/zksc-ir0plus/", "src/Rust/zksc-circom/", "src/Rust/zksc-dummy"]
 exclude = [ "docs/M38-Poseidon/test" ]
 
 [profile.debug-opt]

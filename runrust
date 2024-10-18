@@ -119,6 +119,11 @@ while [ "$#" -gt 0 ]; do
                 shift
                 continue
                 ;;
+            "--circom")
+                BIN="zksc-circom"
+                shift
+                continue
+                ;;
             "--emp")
                 BIN="zksc-emp"
                 shift
@@ -226,6 +231,7 @@ if [ -z "$ZKSC" ]; then
     echo "  --ir0plus               Use IR0+ output."
     echo "  --emp                   Use EMP backend instead of IR."
     echo "  --emp-addr ADDR:PORT    Set EMP backend address and port when using remotely. This also sets --emp to be true."
+    echo "  --circom                Use Circom output."
     echo "  --interactive ADDR:PORT Use interactive proofs (needed for challenges from verifier to prover). The argument is the address and port (e.g. 127.0.0.1:12350) for the TCP connection for sending challenges."
     echo "  -L|--library-path DIR   Library search path."
     echo "  -c|--cfg FILE           CCC input file."
