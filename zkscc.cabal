@@ -2,8 +2,8 @@ name:                zkscc
 version:             0.2.0.0
 synopsis:            ZK-SecreC compiler
 license:             BSD3
-author:              Härmel Nestra, Jaak Randmets, Joosep Jääger, Martin Pettai,  Peeter Laud, Ville Sokk
-maintainer:          Jaak Randmets <jaak.randmets@cyber.ee>
+author:              Dan Bogdanov, Joosep Jääger, Peeter Laud, Härmel Nestra, Martin Pettai, Jaak Randmets, Raul-Martin Rebane, Ville Sokk
+maintainer:          Raul-Martin Rebane <raul-martin.rebane@cyber.ee>
 copyright:           2024 Cybernetica AS
 category:            Compilers/Interpreters, Cryptography
 build-type:          Custom
