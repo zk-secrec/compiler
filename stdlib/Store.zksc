@@ -23,7 +23,7 @@ fn sort_lists[N : Nat]
 ) -> list[list[uint[N] $post @prover]]
 where Field[N], Vectorization
 { 
-  if (Challenge[N])
+  if (Challenge[plain[N]])
   { let sortPerm = __get_sorting_permutation(for i in 0 .. length(keys) { keys[i] as $pre as uint })
   ; let idxs = for i in 0..length(keys) { (wire { i as uint[N] }) as @prover }
   ; apply_perm([ops, keys, values, idxs], sortPerm)
@@ -177,7 +177,7 @@ fn finalize_store[N : Nat]
 , def : bool $pre @public
 )
 where Field[N], Vectorization 
-{ if (Challenge[N]) 
+{ if (Challenge[plain[N]]) 
   { dbg_print(string_append("Finalizing $post @prover challenge store with ", string_append(to_string(length(opers)), " operations")))
   ; finalize_store_helper(opers, keys, values, writeOnce, contiguous, def) 
   } else 

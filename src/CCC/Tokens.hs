@@ -23,6 +23,7 @@ data Token
   | TokField
   | TokExtField
   | TokRing
+  | TokBitwise
   | TokConvert
   | TokOut
   | TokIn
@@ -42,7 +43,7 @@ data Token
   | TokComma
   | TokColon
   | TokSemicolon
-  | TokInt Integer
+  | TokInteger Integer
   | TokId Text.Text
   | TokEOF
   deriving (Show, Eq)

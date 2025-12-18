@@ -134,6 +134,11 @@ while [ "$#" -gt 0 ]; do
                 shift
                 continue
                 ;;
+            "--air")
+                BIN="zksc-air"
+                shift
+                continue
+                ;;
             "--emp-addr")
                 BIN="zksc-emp"
                 EMP_ADDR="$2"

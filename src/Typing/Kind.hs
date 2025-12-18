@@ -26,6 +26,7 @@ data Kind
   | KindStage
   | KindBool -- for effect system
   | KindNat
+  | KindRing
   | KindUnqualified
   | KindStar
   | KindUnknown
@@ -43,6 +44,7 @@ instance Pretty Kind where
       go _ KindStage = pretty "Stage"
       go _ KindBool = pretty "Bool"
       go _ KindNat = pretty "Nat"
+      go _ KindRing = pretty "Ring"
       go _ KindUnqualified = pretty "Unqualified"
       go _ KindStar = pretty "Qualified"
       go _ KindUnknown = pretty "Unknown"
@@ -58,6 +60,7 @@ kindConvTo KindDomain KindDomain = True
 kindConvTo KindStage KindStage = True
 kindConvTo KindBool KindBool = True
 kindConvTo KindNat KindNat = True
+kindConvTo KindRing KindRing = True
 kindConvTo KindUnqualified KindUnqualified = True
 kindConvTo KindUnqualified KindStar = True
 kindConvTo KindStar KindStar = True
@@ -71,6 +74,7 @@ unifyKinds KindDomain KindDomain = Just KindDomain
 unifyKinds KindStage KindStage = Just KindStage
 unifyKinds KindBool KindBool = Just KindBool
 unifyKinds KindNat KindNat = Just KindNat
+unifyKinds KindRing KindRing = Just KindRing
 unifyKinds KindStar KindUnqualified = Just KindStar
 unifyKinds KindUnqualified KindStar = Just KindStar
 unifyKinds KindUnqualified KindUnqualified = Just KindUnqualified

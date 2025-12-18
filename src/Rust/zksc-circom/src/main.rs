@@ -10,6 +10,7 @@ use std::io::Write;
 //use std::rc::Rc;
 
 use num_traits::identities::Zero;
+use num_traits::One;
 use simple_logger::SimpleLogger;
 
 use zksc_app_lib::command_line::*;
@@ -205,7 +206,7 @@ impl CircomBackend {
     fn new_wire_range(&self, m: &NatType, n: usize) -> WireRangeImpl {
         self.check_modulus(m);
         let w = *self.next_wire.borrow();
-        *self.next_wire.borrow_mut() = w + n as u64;
+        *self.next_wire.borrow_mut() = w + (if n > 0 { n } else { 1 }) as u64;
         let wr = WireRangeImpl::new(w, n);
         self.rel(format!("signal {}[{}];", wr.name, wr.length));
         wr
@@ -310,6 +311,27 @@ impl CircomBackend {
     fn set_fun_indent(&self, s: &str) {
         *self.fun_indent.borrow_mut() = s.to_string();
     }
+}
+
+fn linear_combination_to_string(lc: &LinearCombination<Option<Wire>>) -> String {
+    let mut s = String::new();
+    for (w, c) in lc {
+        if !s.is_empty() {
+            s.push_str(" + ");
+        }
+        match w {
+            None => s.push_str(&c.to_string()),
+            Some(w) => {
+                let w = downcast_wire(w);
+                if c.is_one() {
+                    s.push_str(&w.0);
+                } else {
+                    s.push_str(&format!("{} * {}", c, &w.0));
+                }
+            }
+        };
+    }
+    s
 }
 
 impl SIEVEIR for CircomBackend {
@@ -538,6 +560,20 @@ impl SIEVEIR for CircomBackend {
     }
 
     fn assert_eq_scalar_vec(&self, _: &NatType, _: &Wire, _: &NatType, _: Vec<Wire>) { todo!() }
+
+    fn assert_r1cs_constraint(&self, _: &NatType, c: &Constraint<Option<Wire>>) {
+        let s1 = linear_combination_to_string(&c.a);
+        let s2 = linear_combination_to_string(&c.b);
+        let s3 = linear_combination_to_string(&c.c);
+        if s1.is_empty() || s2.is_empty() {
+            if !s3.is_empty() {
+                self.rel(format!("{} === 0;", s3));
+            }
+        } else {
+            let s3 = if s3.is_empty() { "0" } else { &s3 };
+            self.rel(format!("({}) * ({}) === {};", s1, s2, s3));
+        }
+    }
 
     fn add_instance(&self, m: &NatType, x: &Value) {
         let ni = *self.num_ins.borrow();

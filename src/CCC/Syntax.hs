@@ -88,6 +88,7 @@ data CCCType name
     , _cccPolPreds :: [Located CCCPred]
     }
   | CCCRing { _cccWidthPreds :: [Located CCCPred] }
+  | CCCBitwise { _cccBitwisePreds :: [Located CCCPred] }
   | CCCPluginType (Located name)
 
 data CCCChallenge

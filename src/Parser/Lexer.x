@@ -104,6 +104,8 @@ tokens :-
         -- Keywords:
         "arr"                       { tokSimple TokArr }
         "as"                        { tokSimple TokAs }
+        "bin"                       { tokSimple TokBin }
+        "bitwise"                   { tokSimple TokBitwise }
         "bool"                      { tokSimple TokBool }
         "break"                     { tokSimple TokBreak }
         "Challenge"                 { tokSimple TokChallenge }
@@ -125,6 +127,7 @@ tokens :-
         "if"                        { tokSimple TokIf }
         "impl"                      { tokSimple TokImpl }
         "in"                        { tokSimple TokIn }
+        "int"                       { tokSimple TokInt }
         "inf"                       { tokSimple TokInf }
         "infix"                     { tokSimple TokInfix }
         "infixl"                    { tokSimple TokInfixL }
@@ -136,7 +139,10 @@ tokens :-
         "Nat"                       { tokSimple TokNat }
         "ObliviousChoice"           { tokSimple TokObliviousChoice }
         "PermutationCheck"          { tokSimple TokPermutationCheck }
+        "plain"                     { tokSimple TokPlain }
         "post"                      { tokSimple TokPost }
+        "PostConvertible"           { tokSimple TokPostConvertible }
+        "PostRing"                  { tokSimple TokPostRing }
         "pre"                       { tokSimple TokPre }
         "prover"                    { tokSimple TokProver }
         "pub"                       { tokSimple TokPub }
@@ -145,6 +151,7 @@ tokens :-
         "rec"                       { tokSimple TokRec }
         "ref"                       { tokSimple TokRef }
         "return"                    { tokSimple TokReturn }
+        "Ring"                      { tokSimple TokRing }
         "self"                      { tokSimple TokSelfId }
         "Self"                      { tokSimple TokSelfType }
         "sieve"                     { tokSimple TokSieve }
@@ -202,7 +209,7 @@ tokens :-
 {
 
 tokenInteger :: Integer -> Action LToken
-tokenInteger base loc buf len = fmap TokInt <$> tokInteger base loc buf len
+tokenInteger base loc buf len = fmap TokInteger <$> tokInteger base loc buf len
 
 tokenChar :: Action LToken
 tokenChar loc buf len = fmap TokChar <$> tokChar loc buf len

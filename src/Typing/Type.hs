@@ -26,6 +26,7 @@ module Typing.Type (
   Mutability(..),
   NatType,
   QualifiedType,
+  RingType,
   SemiRing(..),
   StageType,
   TVDomain(..),
@@ -79,6 +80,8 @@ module Typing.Type (
   mkTypeU64,
   mkNat,
   mkInfinite,
+  mkPlain,
+  mkBitwise,
   mkQualified,
   mkQualifiedL,
   mkTypeString,
@@ -86,8 +89,8 @@ module Typing.Type (
   mkTypeUInt,
   mkTypeUIntMod,
   mkTypeUnit,
-  mkUnqualUInt,
-  mkUnqualBool,
+  mkUnqualInt,
+  mkUnqualBin,
   mkVerifierDomain,
   subType,
   subTypePred,
@@ -127,17 +130,21 @@ module Typing.Type (
   pattern PredArray,
   pattern PredExtendedArithmetic,
   pattern PredSized,
+  pattern PredPostRing,
+  pattern PredPostConvertible,
   pattern PredField,
-  pattern PredChallenge,
   pattern PredConvertible,
+  pattern PredChallenge,
   pattern PredPermutationCheck,
   pattern PredVectors,
   pattern PredVectorization,
   pattern PredObliviousChoice,
-  pattern PredTestExtendedArithmetic,
+  pattern PredTestPostRing,
+  pattern PredTestPostConvertible,
   pattern PredTestField,
-  pattern PredTestChallenge,
   pattern PredTestConvertible,
+  pattern PredTestExtendedArithmetic,
+  pattern PredTestChallenge,
   pattern PredTestPermutationCheck,
   pattern PredTestVectors,
   pattern PredTestObliviousChoice,
@@ -148,6 +155,10 @@ module Typing.Type (
   pattern TStage,
   pattern TKBool,
   pattern THole,
+  pattern TPlain,
+  pattern TBitwise,
+  pattern TInt,
+  pattern TBin,
   pattern TBool,
   pattern TUInt,
   pattern TNat,
@@ -163,6 +174,9 @@ module Typing.Type (
   pattern TList,
   pattern TArr,
   pattern TStore,
+  predField,
+  predConvertible,
+  natOfRing,
 )
 where
 
@@ -172,6 +186,7 @@ import Support.UniqMap
 import Support.Unique
 import Typing.Kind
 
+import Control.Applicative
 import Control.Lens hiding (Level)
 import Data.Maybe (mapMaybe)
 import Data.List (intersperse)
@@ -221,7 +236,7 @@ u64 :: ExtendedNatural
 u64 = Finite (2 ^ 64)
 
 data TypeCon
-  = ConBool          -- bool[...]
+  = ConBin           -- bin[...]
   | ConFun           -- ... -> ...
   | ConList          -- list[...]
   | ConArr           -- arr[...]
@@ -231,7 +246,9 @@ data TypeCon
   | ConPublic        -- @public
   | ConNoDomain      -- @? (missing domain produced by parser, handled by TC)
   | ConTuple Int     -- tuple[...]
-  | ConUInt          -- uint[...]
+  | ConInt           -- int[...]
+  | ConPlain         -- plain[...]
+  | ConBitwise       -- bitwise[...]
   | ConUnit          -- ()
   | ConVerifier      -- @verifier
   | ConPre           --  $pre
@@ -313,11 +330,15 @@ type QualifiedType a = Type a
 type StageType a = Type a
 
 -- Unchecked natural number types.
--- If m :: ModulusType a then m must have KindNat
+-- If m :: NatType a then m must have KindNat
 type NatType a = Type a
 
+-- Unchecked ring types.
+-- If r :: RingType a then r must have KindRing
+type RingType a = Type a
+
 -- For effect system
--- If m :: KBoolType a then m must have KindBool
+-- If b :: KBoolType a then b must have KindBool
 type KBoolType a = Type a
 
 boolAsType :: Bool -> KBoolType a
@@ -356,17 +377,17 @@ data TypePredCon
   | PConHasDefaultValue [FieldAccessor]
   | PConArray -- t is either list or array type constructor
   | PConSized
-  | PConField
+  | PConPostRing
+  | PConPostConvertible
   | PConChallenge
-  | PConConvertible
   | PConExtendedArithmetic
   | PConPermutationCheck
   | PConVectors
   | PConVectorization
   | PConObliviousChoice
-  | PConTestField
+  | PConTestPostRing
+  | PConTestPostConvertible
   | PConTestChallenge
-  | PConTestConvertible
   | PConTestExtendedArithmetic
   | PConTestPermutationCheck
   | PConTestVectors
@@ -399,21 +420,35 @@ pattern PredValidStore k v s l = TypePred PConValidStore [k, v, s] l
 pattern PredHasDefaultValue path t l = TypePred (PConHasDefaultValue path) [t] l
 pattern PredArray t l = TypePred PConArray [t] l
 pattern PredSized t l = TypePred PConSized [t] l
-pattern PredField n l = TypePred PConField [n] l
-pattern PredChallenge n l = TypePred PConChallenge [n] l
-pattern PredConvertible n1 n2 l = TypePred PConConvertible [n1, n2] l
+pattern PredPostRing r l = TypePred PConPostRing [r] l
+pattern PredPostConvertible r1 r2 l = TypePred PConPostConvertible [r1, r2] l
+pattern PredField n l <- TypePred PConPostRing [TApp (TCon ConPlain _) [n] _] l
+pattern PredConvertible n1 n2 l <- TypePred PConPostConvertible [TApp (TCon ConPlain _) [n1] _, TApp (TCon ConPlain _) [n2] _] l
+pattern PredChallenge r l = TypePred PConChallenge [r] l
 pattern PredExtendedArithmetic l = TypePred PConExtendedArithmetic [] l
 pattern PredPermutationCheck l = TypePred PConPermutationCheck [] l
 pattern PredVectors l = TypePred PConVectors [] l
 pattern PredVectorization l = TypePred PConVectorization [] l
 pattern PredObliviousChoice l = TypePred PConObliviousChoice [] l
-pattern PredTestField n l = TypePred PConTestField [n] l
-pattern PredTestChallenge n l = TypePred PConTestChallenge [n] l
-pattern PredTestConvertible n1 n2 l = TypePred PConTestConvertible [n1, n2] l
+pattern PredTestPostRing r l = TypePred PConTestPostRing [r] l
+pattern PredTestPostConvertible r1 r2 l = TypePred PConTestPostConvertible [r1, r2] l
+pattern PredTestField n l <- TypePred PConTestPostRing [TApp (TCon ConPlain _) [n] _] l
+pattern PredTestConvertible n1 n2 l <- TypePred PConTestPostConvertible [TApp (TCon ConPlain _) [n1] _, TApp (TCon ConPlain _) [n2] _] l
+pattern PredTestChallenge r l = TypePred PConTestChallenge [r] l
 pattern PredTestExtendedArithmetic l = TypePred PConTestExtendedArithmetic [] l
 pattern PredTestPermutationCheck l = TypePred PConTestPermutationCheck [] l
 pattern PredTestVectors l = TypePred PConTestVectors [] l
 pattern PredTestObliviousChoice l = TypePred PConTestObliviousChoice [] l
+
+predField
+  :: NatType a -> Location -> TypePred a
+predField n l
+  = TypePred PConPostRing [TApp (TCon ConPlain l) [n] l] l
+
+predConvertible
+  :: NatType a -> NatType a -> Location -> TypePred a
+predConvertible n1 n2 l
+  = TypePred PConPostConvertible [TApp (TCon ConPlain l) [n1] l, TApp (TCon ConPlain l) [n2] l] l
 
 instance Eq a => Eq (TypePred a) where
   TypePred c ts _ == TypePred c' ts' _ = (c, ts) == (c', ts')
@@ -436,9 +471,9 @@ isPredAllowedImplicitly
   :: TypePred a -> Bool
 isPredAllowedImplicitly (TypePred pcon _ _)
   = elem pcon 
-    [ PConTestField
+    [ PConTestPostRing
+    , PConTestPostConvertible
     , PConTestChallenge
-    , PConTestConvertible
     , PConTestExtendedArithmetic
     , PConTestObliviousChoice
     , PConTestPermutationCheck
@@ -482,7 +517,7 @@ k1 -*> k2 = k1 `KindFun` k2
 
 typeConKind :: TypeCon -> Kind
 typeConKind = \case
-  ConBool -> KindNat -*> KindUnqualified
+  ConBin -> KindRing -*> KindUnqualified
   ConList -> KindStar -*> KindUnqualified
   ConArr -> KindStar -*> KindUnqualified
   ConNat {} -> KindNat
@@ -491,7 +526,9 @@ typeConKind = \case
   ConPublic -> KindDomain
   ConNoDomain -> KindDomain
   ConTuple k -> foldr KindFun KindUnqualified (replicate k KindStar)
-  ConUInt -> KindNat -*> KindUnqualified
+  ConInt -> KindRing -*> KindUnqualified
+  ConPlain -> KindNat -*> KindRing
+  ConBitwise -> KindNat -*> KindRing
   ConUnit -> KindUnqualified
   ConVerifier -> KindDomain
   ConFun -> KindStar -*> KindStar -*> KindUnqualified
@@ -559,8 +596,10 @@ instance Pretty a => Pretty (TypePred a) where
   pretty (PredArray t _) = "Array" <> brackets (pretty t)
   pretty (PredSized t _) = "Sized" <> brackets (pretty t)
   pretty (PredField t _) = "Field" <> brackets (pretty t)
-  pretty (PredChallenge t _) = "Challenge" <> brackets (pretty t)
   pretty (PredConvertible t1 t2 _) = "Convertible" <> brackets (pretty t1 <> "," <> pretty t2)
+  pretty (PredChallenge t _) = "Challenge" <> brackets (pretty t)
+  pretty (PredPostRing t _) = "PostRing" <> brackets (pretty t)
+  pretty (PredPostConvertible t1 t2 _) = "PostConvertible" <> brackets (pretty t1 <> "," <> pretty t2)
   pretty (PredExtendedArithmetic _) = "ExtendedArithmetic"
   pretty (PredPermutationCheck _) = "PermutationCheck"
   pretty (PredVectors _) = "Vectors"
@@ -734,13 +773,35 @@ viewKBool ConTT = Just TVTT
 viewKBool ConNoBool = Just TVNoBool
 viewKBool _ = Nothing
 
+viewTBin :: Type a -> Maybe (Type a)
+viewTBin (TApp (TCon ConBin _) [ring] _) = Just ring
+viewTBin _                               = Nothing
+
+viewTInt :: Type a -> Maybe (Type a)
+viewTInt (TApp (TCon ConInt _) [ring] _) = Just ring
+viewTInt _                               = Nothing
+
+viewTPlain :: Type a -> Maybe (Type a)
+viewTPlain (TApp (TCon ConPlain _) [nat] _) = Just nat
+viewTPlain _                                = Nothing
+
+viewTBitwise :: Type a -> Maybe (Type a)
+viewTBitwise (TApp (TCon ConBitwise _) [nat] _) = Just nat
+viewTBitwise _                                  = Nothing
+
 viewTBool :: Type a -> Maybe (Type a)
-viewTBool (TApp (TCon ConBool _) [mod] _) = Just mod
-viewTBool _ = Nothing
+viewTBool t
+  = do
+      ring <- viewTBin t
+      nat <- viewTPlain ring
+      return nat
 
 viewTUInt :: Type a -> Maybe (Type a)
-viewTUInt (TApp (TCon ConUInt _) [mod] _) = Just mod
-viewTUInt _ = Nothing
+viewTUInt t
+  = do
+      ring <- viewTInt t
+      nat <- viewTPlain ring
+      return nat
 
 pattern TString <- TCon ConString _
 pattern TDomain d <- TCon (viewDom -> Just d) _
@@ -750,6 +811,10 @@ pattern TUnit <- TCon ConUnit _
 pattern THole <- TCon ConHole _
 pattern TBool m <- (viewTBool -> Just m)
 pattern TUInt m <- (viewTUInt -> Just m)
+pattern TBin r <- (viewTBin -> Just r)
+pattern TInt r <- (viewTInt -> Just r)
+pattern TPlain n <- (viewTPlain -> Just n)
+pattern TBitwise n <- (viewTBitwise -> Just n)
 pattern TNat n <- TCon (ConNat n) _
 pattern TList t <- TApp (TCon ConList _) [t] _
 pattern TArr t <- TApp (TCon ConArr _) [t] _ where
@@ -785,10 +850,14 @@ instance Pretty a => Pretty (Type a) where
       go p t = case t of
         TBool (TNat Infinite) -> "bool"
         TBool t -> "bool" <> brackets (pretty t)
-        TString -> "string"
         TUInt (TNat Infinite) -> "uint"
         TUInt t -> "uint" <> brackets (pretty t)
+        TBin t -> "bin" <> brackets (pretty t)
+        TInt t -> "int" <> brackets (pretty t)
+        TPlain t -> "plain" <> brackets (pretty t)
+        TBitwise t -> "bitwise" <> brackets (pretty t)
         TUnit -> "()"
+        TString -> "string"
         THole -> "_"
         TVar x k _
           | k == KindStage  -> "$" <> pretty x
@@ -827,6 +896,7 @@ extractHeadVar = \ case
     -> Just (Located l x)
   _ -> Nothing
 
+-- Finds only the qualified types that use a type level natural number as modulus
 kindNatInType :: Traversal' (Type a) (Type a)
 kindNatInType f = \ case
   q@(TQualify u s _)
@@ -837,6 +907,9 @@ kindNatInType f = \ case
     | TBool (TVar _ _ _) <- u -> f q
   TApp tfun targs l    -> TApp <$> kindNatInType f tfun <*> traverse (kindNatInType f) targs <*> pure l
   t                    -> pure t
+
+natOfRing :: RingType a -> Maybe (NatType a)
+natOfRing ring = viewTPlain ring <|> viewTBitwise ring
 
 {------------------------
  -- Smart constructors --
@@ -887,7 +960,7 @@ mkTypeBoolMod nat = mkTypeBool' (Just nat)
 
 mkTypeBool' :: Maybe (NatType a) -> StageType a -> DomainType a -> QualifiedType a
 mkTypeBool' maybeMod stage dom =
-  mkScalarType maybeMod stage dom ConBool
+  mkScalarType maybeMod stage dom ConBin ConPlain
 
 mkTypeUInt :: StageType a -> DomainType a -> QualifiedType a
 mkTypeUInt = mkTypeUInt' Nothing
@@ -897,7 +970,7 @@ mkTypeUIntMod nat = mkTypeUInt' (Just nat)
 
 mkTypeUInt' :: Maybe (NatType a) -> StageType a -> DomainType a -> QualifiedType a
 mkTypeUInt' maybeMod stage dom =
-  mkScalarType maybeMod stage dom ConUInt
+  mkScalarType maybeMod stage dom ConInt ConPlain
 
 mkTypeU64 :: StageType a -> DomainType a -> QualifiedType a
 mkTypeU64 = mkTypeUIntMod (mkNat u64)
@@ -908,20 +981,30 @@ mkNat n = mkCon (ConNat n)
 mkInfinite :: NatType a
 mkInfinite = mkNat Infinite
 
-mkUnqualUInt :: NatType a ->  UnqualifiedType a
-mkUnqualUInt t = TApp (mkCon ConUInt) [t] NoLocation
+mkPlain :: NatType a -> RingType a
+mkPlain t = mkTApp (mkCon ConPlain) [t]
 
-mkUnqualBool :: NatType a -> UnqualifiedType a
-mkUnqualBool t = TApp (mkCon ConBool) [t] NoLocation
+mkBitwise :: NatType a -> RingType a
+mkBitwise t = mkTApp (mkCon ConBitwise) [t]
 
-mkScalarType :: Maybe (NatType a) -> StageType a -> DomainType a ->
-  TypeCon -> QualifiedType a
-mkScalarType maybeMod stage dom con =
+mkUnqualInt :: RingType a ->  UnqualifiedType a
+mkUnqualInt t = mkUnqualType t ConInt
+
+mkUnqualBin :: RingType a -> UnqualifiedType a
+mkUnqualBin t = mkUnqualType t ConBin
+
+mkUnqualType :: RingType a -> TypeCon -> UnqualifiedType a
+mkUnqualType ring tycon
+  = mkTApp (mkCon tycon) [ring]
+
+mkScalarType :: Maybe (NatType a) -> StageType a -> DomainType a -> TypeCon -> TypeCon -> QualifiedType a
+mkScalarType maybeNat stage dom tycon ringcon =
   mkQualified unqualifiedTy stage dom
   where
-    unqualifiedTy = case maybeMod of
-      Just mod -> mkTApp (mkCon con) [mod]
-      Nothing -> mkTApp (mkCon con) [mkCon (ConNat Infinite)]
+    unqualifiedTy = mkUnqualType (mkTApp (mkTCon ringcon) [natTy]) tycon
+    natTy = case maybeNat of
+      Just nat -> nat
+      _        -> mkCon (ConNat Infinite)
 
 mkTypeList :: QualifiedType a -> DomainType a -> QualifiedType a
 mkTypeList elemType = mkQualified (TApp (mkCon ConList) [elemType] NoLocation) mkPre

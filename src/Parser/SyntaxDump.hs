@@ -203,7 +203,6 @@ dumpStmt (Let b (Binding mut x mTy) mExpr) = withName name (
       Immutable -> "Let"
 dumpStmt (Return e) = withName "Return" (dumpExpr e)
 
-
 dumpFuncOrMethod :: Pretty a => FuncOrMethod a -> Doc ann
 dumpFuncOrMethod (Func f)
   = withLocationInline "Func" pretty f
@@ -290,6 +289,7 @@ dumpKind KindDomain = "KindDomain"
 dumpKind KindBool = "KindBool"
 dumpKind KindStar = "KindStar"
 dumpKind KindNat = "KindNat"
+dumpKind KindRing = "KindRing"
 dumpKind (KindFun k1 k2) = withName "KindFun" (dumpKind k1 $$ dumpKind k2)
 dumpKind KindUnknown = "KindUnknown"
 dumpKind KindEffect = "KindEffect"

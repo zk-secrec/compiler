@@ -1,0 +1,18 @@
+// ./runrust circom-frontend/Sha256Test.zksc --circom -o circom/example
+
+// This calls the SHA-256_2 circuit from circomlib.
+// The circomlib code tree needs to be copied under the circom-frontend directory for it to work.
+// sha256test.circom must be prepared with the following in the circom-frontend directory:
+//     ./prepare_circuit sha256test
+
+use CallCircom::*;
+
+type N : Nat = 21888242871839275222246405745257275088548364400416034343698204186575808495617; // default modulus of circom
+
+fn main() where Field[N] {
+    let x1 : uint[N] $post @prover = wire { 3 };
+    let x2 : uint[N] $post @prover = wire { 4 };
+    let x3 : uint[N] $post @verifier = wire { 11154818218798773140559989663047123294107280768416365281597270477 };
+    let out = call_circom("sha256test", [], [x1, x2]);
+    assert_zero(out[0] - x3 as @prover);
+}

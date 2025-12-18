@@ -1,0 +1,19 @@
+#!/bin/bash
+
+if [ -z "$1" ]; then
+    echo "Usage: $0 CIRCUIT"
+    echo "There must be a file CIRCUIT.r1cs"
+    exit 1
+fi
+
+if [ ! -f "$1.r1cs" ]; then
+    echo "File $1.r1cs does not exist."
+    exit 1
+fi
+
+# The prefix of input files, the same as the one given after the -o option of runrust when generating those files but without the directory prefix. It must be in the current directory.
+INPUT="$1"
+
+# This is executed by prover:
+echo "Extending the witness"
+${INPUT}_cpp/${INPUT} "${INPUT}_prover_input.json" ${INPUT}.wtns || exit 1

@@ -1,0 +1,1 @@
+pub extern fn call_circom[N : Nat](name : string $pre @public, ins : list[uint[N] $post @verifier], wit : list[uint[N] $post @prover]) -> list[uint[N] $post @prover];

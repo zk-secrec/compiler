@@ -1,0 +1,37 @@
+#!/bin/bash
+
+if [ -z "$1" ]; then
+    echo "Usage: $0 CIRCUIT"
+    echo "There must be a file CIRCUIT.circom"
+    exit 1
+fi
+
+if [ ! -f "$1.circom" ]; then
+    echo "File $1.circom does not exist."
+    exit 1
+fi
+
+# The prefix of input files, the same as the one given after the -o option of runrust when generating those files but without the directory prefix. It must be in the current directory.
+INPUT="$1"
+# PRIME must be one of the following:
+#PRIME=bn128
+#PRIME=bls12381
+PRIME="`cat "${INPUT}_prime.txt"`"
+R1CS="$INPUT.r1cs"
+
+if [ -z "$PRIME" ]; then
+    echo "PRIME not specified: maybe the relation does not use any wires"
+    exit 1
+fi
+
+# This can be executed by prover and verifier independently:
+echo "Compiling circom"
+date
+/usr/bin/time -v circom -p $PRIME "$INPUT.circom" --r1cs --c || exit 1
+
+# This (and the --c above) only needs to be executed by the prover:
+date
+echo "Preparing proof generation"
+cd ${INPUT}_cpp
+/usr/bin/time -v make || exit 1
+cd ..

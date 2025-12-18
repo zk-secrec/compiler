@@ -65,6 +65,8 @@ import Safe (lastDef)
     -- Keywords:
     'arr'                { Located $$ TokArr }
     'as'                 { Located $$ TokAs }
+    'bin'                { Located $$ TokBin }
+    'bitwise'            { Located $$ TokBitwise }
     'bool'               { Located $$ TokBool }
     'break'              { Located $$ TokBreak }
     'Challenge'          { Located $$ TokChallenge }
@@ -79,7 +81,7 @@ import Safe (lastDef)
     'ExtendedArithmetic' { Located $$ TokExtendedArithmetic }
     'extern'             { Located $$ TokExtern }
     'false'              { Located $$ TokFalse }
-    'Field'              { Located $$ TokField }
+    'Field'              { Located $$ TokField }	
     'fn'                 { Located $$ TokFn }
     'for'                { Located $$ TokFor }
     'forall'             { Located $$ TokForAll }
@@ -90,6 +92,7 @@ import Safe (lastDef)
     'infix'              { Located $$ TokInfix }
     'infixl'             { Located $$ TokInfixL }
     'infixr'             { Located $$ TokInfixR }
+    'int'                { Located $$ TokInt }
     'let'                { Located $$ TokLet }
     'list'               { Located $$ TokList }
     'match'              { Located $$ TokMatch }
@@ -97,7 +100,10 @@ import Safe (lastDef)
     'Nat'                { Located $$ TokNat }
     'ObliviousChoice'    { Located $$ TokObliviousChoice }
     'PermutationCheck'   { Located $$ TokPermutationCheck }
+    'plain'              { Located $$ TokPlain }
     'post'               { Located $$ TokPost }
+    'PostRing'           { Located $$ TokPostRing }
+    'PostConvertible'    { Located $$ TokPostConvertible }
     'pre'                { Located $$ TokPre }
     'prover'             { Located $$ TokProver }
     'pub'                { Located $$ TokPub }
@@ -106,6 +112,7 @@ import Safe (lastDef)
     'rec'                { Located $$ TokRec }
     'ref'                { Located $$ TokRef }
     'return'             { Located $$ TokReturn }
+    'Ring'               { Located $$ TokRing }
     'Self'               { Located $$ TokSelfType }
     'self'               { Located $$ TokSelfId }
     'sieve'              { Located $$ TokSieve }
@@ -137,7 +144,7 @@ import Safe (lastDef)
     OPER                 { Located _ (TokSymbol _) }
 
     IDENT                { Located _ (TokId _) }
-    INT                  { Located _ (TokInt _) }
+    INT                  { Located _ (TokInteger _) }
     CHAR                 { Located _ (TokChar _) }
 
 %right '='
@@ -432,6 +439,7 @@ PrimType :: { Type Text }
     : StageType { $1 }
     | DomainType { $1 }
     | NaturalType { $1 }
+    | InfoType { $1 }
     | BoolType { $1 }
     | 'string' { TCon ConString $1 }
     | '(' ')' { TCon ConUnit (joinLocations $1 $2) }
@@ -509,19 +517,37 @@ TupleType :: { Type Text }
 -- Shift/reduce conflict is OK because of longest parse rule.
 BoolType :: { UnqualifiedType Text }
     : 'bool' {
-        TApp (TCon ConBool $1) [TCon (ConNat Infinite) $1] $1
+        TApp (TCon ConBin $1) [TApp (TCon ConPlain $1) [TCon (ConNat Infinite) $1] $1] $1
     }
     | 'bool' '[' ModulusType ']' {
-        TApp (TCon ConBool $1) [$3] (joinLocations $1 $>)
+        TApp (TCon ConBin $1) [TApp (TCon ConPlain $1) [$3] (joinLocations $1 $>)] (joinLocations $1 $>)
+    }
+    | 'bin' '[' RingType ']' {
+        TApp (TCon ConBin $1) [$3] (joinLocations $1 $>)
     }
 
 -- Shift/reduce conflict is OK because of longest parse rule.
 UIntType :: { UnqualifiedType Text }
     : 'uint' {
-        TApp (TCon ConUInt $1) [TCon (ConNat Infinite) $1] $1
+        TApp (TCon ConInt $1) [TApp (TCon ConPlain $1) [TCon (ConNat Infinite) $1] $1] $1
     }
     | 'uint' '[' ModulusType ']' {
-        TApp (TCon ConUInt $1) [$3] (joinLocations $1 $>)
+        TApp (TCon ConInt $1) [TApp (TCon ConPlain $1) [$3] (joinLocations $1 $>)] (joinLocations $1 $>)
+    }
+    | 'int' '[' RingType ']' {
+        TApp (TCon ConInt $1) [$3] (joinLocations $1 $>)
+    }
+
+RingType :: { RingType Text }
+    : InfoType { $1 }
+    | Identifier { TVar (unLocated $1) KindRing (location $1) }
+
+InfoType :: { RingType Text }
+    : 'plain' '[' ModulusType ']' {
+        TApp (TCon ConPlain $1) [$3] (joinLocations $1 $>)
+    }
+    | 'bitwise' '[' ModulusType ']' {
+        TApp (TCon ConBitwise $1) [$3] (joinLocations $1 $>)
     }
 
 ModulusType :: { NatType Text }
@@ -702,6 +728,7 @@ AtomicKind :: { Located Kind }
     | 'Domain'       { Located $1 KindDomain }
     | 'Stage'        { Located $1 KindStage }
     | 'Nat'          { Located $1 KindNat }
+    | 'Ring'         { Located $1 KindRing }
     | '(' Kind ')'   { Located (joinLocs $1 $>) (unLocated $2) }
 
 CompoundKind :: { Located Kind }
@@ -726,12 +753,14 @@ TypePredicate :: { TypePred Text }
         let ident = unLocated $1
         let tys = reverse $3
         case ident of
-          "Field"       -> return $ TypePred PConField tys loc
-          "Convertible" -> return $ TypePred PConConvertible tys loc
-          "SizedType"   -> return $ TypePred PConSized tys loc
-          "Array"       -> return $ TypePred PConArray tys loc
-          "Challenge"   -> return $ TypePred PConChallenge tys loc
-          _             -> parseError (location $1) "Invalid type predicate."
+          "Field"           -> return $ predField (tys !! 0) loc -- TypePred PConField tys loc
+          "Convertible"     -> return $ predConvertible (tys !! 0) (tys !! 1) loc -- TypePred PConConvertible tys loc
+          "PostRing"        -> return $ TypePred PConPostRing tys loc
+          "PostConvertible" -> return $ TypePred PConPostConvertible tys loc
+          "Challenge"       -> return $ TypePred PConChallenge tys loc
+          "SizedType"       -> return $ TypePred PConSized tys loc
+          "Array"           -> return $ TypePred PConArray tys loc
+          _                 -> parseError (location $1) "Invalid type predicate."
      }
    | Identifier {% do
        let loc = location $1
@@ -751,9 +780,11 @@ SpecialTypePred :: { TypePred Text }
     | DomainType '<=' DomainType { TypePred PConSub [$1, $3] (joinLocs $1 $>) }
 
 CCCTypePred :: { TypePred Text }
-    : 'Field' '[' ModulusType ']' { TypePred PConField [$3] (joinLocs $1 $>) }
-    | 'Challenge' '[' ModulusType ']' { TypePred PConChallenge [$3] (joinLocs $1 $>) }
-    | 'Convertible' '[' ModulusType ',' ModulusType ']' { TypePred PConConvertible [$3, $5] (joinLocs $1 $>) }
+    : 'Field' '[' ModulusType ']' { predField $3 (joinLocs $1 $>) }
+    | 'Convertible' '[' ModulusType ',' ModulusType ']' { predConvertible $3 $5 (joinLocs $1 $>) }
+    | 'PostRing' '[' RingType ']' { TypePred PConPostRing [$3] (joinLocs $1 $>) }
+    | 'PostConvertible' '[' RingType ',' RingType ']' { TypePred PConPostConvertible [$3, $5] (joinLocs $1 $>) }
+    | 'Challenge' '[' RingType ']' { TypePred PConChallenge [$3] (joinLocs $1 $>) }
     | 'ExtendedArithmetic' { TypePred PConExtendedArithmetic [] (location $1) }
     | 'PermutationCheck' { TypePred PConPermutationCheck [] (location $1) }
     | 'Vectors' { TypePred PConVectors [] (location $1) }
@@ -825,7 +856,7 @@ nl = NoLocation
 --
 
 mkInteger :: LToken -> Located Integer
-mkInteger (Located l (TokInt n)) = Located l n
+mkInteger (Located l (TokInteger n)) = Located l n
 
 toStmt :: Either (Expr a) (Stmt a) -> Stmt a
 toStmt (Left e) = Expr e

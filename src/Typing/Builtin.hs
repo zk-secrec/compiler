@@ -59,70 +59,81 @@ freshNatType occ = do
   nat <- freshVar k occ
   return (nat, TVar nat k NoLocation)
 
-mkBinHelper :: (NatType Var ->  UnqualifiedType Var) -> (NatType Var -> UnqualifiedType Var) -> TVStage -> TcM (TypeScheme Var) 
+freshRingType :: String -> TcM (TyVar, RingType Var)
+freshRingType occ = do
+  let k = KindRing
+  ring <- freshVar k occ
+  return (ring, TVar ring k NoLocation)
+
+freshMixedType :: String -> TcM (TyVar , RingType Var)
+freshMixedType occ = do
+  (var, natTy) <- freshNatType occ
+  return (var, mkPlain natTy)
+
+mkBinHelper :: TcM (Var, RingType Var) -> (RingType Var -> UnqualifiedType Var) -> (RingType Var -> UnqualifiedType Var) -> TVStage -> TcM (TypeScheme Var)
 -- NoStage means stage polymorphism
-mkBinHelper mkArgTy mkResTy s = do
+mkBinHelper freshType mkArgTy mkResTy s = do
   l <- tcGetLoc
-  (nVar, nType) <- freshNatType "N"
-  let argTy = mkArgTy nType
-  let resTy = mkResTy nType
+  (var, rType) <- freshType
+  let argTy = mkArgTy rType
+  let resTy = mkResTy rType
   (domVar, dom) <- freshDomainType "D"
   (stageVars, stage) <- case s of
     TVPre  -> return (Nothing, mkPre)
     TVPost -> return (Nothing, mkPost)
     _      -> (_1 %~ Just) <$> freshStageType "S"
   preds <- return $ case s of
-    TVPost -> [PredField nType l, PredExtendedArithmetic l]
+    TVPost -> [PredPostRing rType l, PredExtendedArithmetic l]
     _      -> []
   let argQTy = mkQualifiedL argTy stage dom l
   let resQTy = mkQualifiedL resTy stage dom l
-  return $ mkScheme ([nVar] ++ maybeToList stageVars ++ [domVar]) preds $ mkFunArgs [argQTy, argQTy] resQTy
+  return $ mkScheme ([var] ++ maybeToList stageVars ++ [domVar]) preds $ mkFunArgs [argQTy, argQTy] resQTy
 
 -- uint -> uint -> uint
 mkBuiltinModInvert :: TcM (TypeScheme Var)
 mkBuiltinModInvert = do
   (domVar, dom) <- freshDomainType "D"
-  let uintTy = mkQualified (mkUnqualUInt mkInfinite) mkPre dom
+  let uintTy = mkQualified (mkUnqualInt (mkPlain mkInfinite)) mkPre dom
   let ty = mkFunArgs [uintTy, uintTy] uintTy
   return $ mkScheme [domVar] [] ty
 
 mkDivMod :: TcM (TypeScheme Var)
 mkDivMod = do
   l <- tcGetLoc
-  (nVar, nType) <- freshNatType "N"
-  let argTy = mkUnqualUInt nType
-  let resTy = mkUnqualUInt nType
+  (nVar, rType) <- freshMixedType "N"
+  let argTy = mkUnqualInt rType
+  let resTy = mkUnqualInt rType
   (domVar, dom) <- freshDomainType "D"
-  let preds = [PredField nType l, PredExtendedArithmetic l]
+  let preds = [PredPostRing rType l, PredExtendedArithmetic l]
   let argQTy = mkQualifiedL argTy mkPost dom l
   let resQTy = mkQualifiedL resTy mkPost dom l
   return $ mkScheme [nVar, domVar] preds $ mkFunArgs [argQTy, argQTy] (mkTypeTuple [resQTy, resQTy])
 
 mkBinArithAny :: TcM (TypeScheme Var)
-mkBinArithAny = mkBinHelper mkUnqualUInt mkUnqualUInt TVNoStage
+mkBinArithAny = mkBinHelper (freshRingType "R") mkUnqualInt mkUnqualInt TVNoStage
 
 mkBinArithPre :: TcM (TypeScheme Var)
-mkBinArithPre = mkBinHelper mkUnqualUInt mkUnqualUInt TVPre
+mkBinArithPre = mkBinHelper (freshMixedType "N") mkUnqualInt mkUnqualInt TVPre
 
 mkBinArithPost :: TcM (TypeScheme Var)
-mkBinArithPost = mkBinHelper mkUnqualUInt mkUnqualUInt TVPost
+mkBinArithPost = mkBinHelper (freshMixedType "N") mkUnqualInt mkUnqualInt TVPost
 
 mkBinRelPre :: TcM (TypeScheme Var)
-mkBinRelPre = mkBinHelper mkUnqualUInt mkUnqualBool TVPre
+mkBinRelPre = mkBinHelper (freshRingType "R") mkUnqualInt mkUnqualBin TVPre
 
 mkBinRelPost :: TcM (TypeScheme Var)
-mkBinRelPost = mkBinHelper mkUnqualUInt mkUnqualBool TVPost
+mkBinRelPost = mkBinHelper (freshMixedType "N") mkUnqualInt mkUnqualBin TVPost
 
 mkModDiv :: TcM (TypeScheme Var)
 mkModDiv = do
   l <- tcGetLoc
   (nVar, n) <- freshNatType "N"
   (domVar, dom) <- freshDomainType "D"
-  let ty = mkQualified (mkUnqualUInt n) mkPre dom
-  return $ mkScheme [nVar, domVar] [PredField n l] $ mkFunArgs [ty, ty] ty
+  let ty = mkQualified (mkUnqualInt (mkPlain n)) mkPre dom
+  return $ mkScheme [nVar, domVar] [predField n l] $ mkFunArgs [ty, ty] ty
 
 mkBinBool :: TcM (TypeScheme Var)
-mkBinBool = mkBinHelper mkUnqualBool mkUnqualBool TVNoStage
+mkBinBool = mkBinHelper (freshRingType "R") mkUnqualBin mkUnqualBin TVNoStage
 
 mkAssertEqUintsBools :: TcM (TypeScheme Var)
 mkAssertEqUintsBools = do
@@ -134,7 +145,7 @@ mkAssertEqUintsBools = do
   let b = mkTypeBoolMod n2 mkPost dom
   let list1 = mkTypeList u mkPublicDomain
   let list2 = mkTypeList b mkPublicDomain
-  let scheme = mkScheme [n1Var, domVar] [PredField n1 l, PredField n2 l] $ mkFunArgs [list1, list2] mkTypeUnit
+  let scheme = mkScheme [n1Var, domVar] [predField n1 l, predField n2 l] $ mkFunArgs [list1, list2] mkTypeUnit
   return scheme
 
 mkAssertEq :: TcM (TypeScheme Var)
@@ -152,20 +163,20 @@ mkAssert :: TcM (TypeScheme Var)
 mkAssert = do
   l <- tcGetLoc
   (domVar, dom) <- freshDomainType "D"
-  (nVar, nTy) <- freshNatType "N"
-  let t = mkUnqualBool nTy
+  (rVar, rTy) <- freshRingType "R"
+  let t = mkUnqualBin rTy
   let boolTy = mkQualifiedL t mkPost dom l
-  let scheme = mkScheme [domVar, nVar] [PredField nTy l] $ mkFunArgs [boolTy] mkTypeUnit
+  let scheme = mkScheme [domVar, rVar] [PredPostRing rTy l] $ mkFunArgs [boolTy] mkTypeUnit
   return scheme
 
 mkAssertZero :: TcM (TypeScheme Var)
 mkAssertZero = do
   l <- tcGetLoc
   (domVar, dom) <- freshDomainType "D"
-  (nVar, nTy) <- freshNatType "N"
-  let t = mkUnqualUInt nTy
+  (rVar, rTy) <- freshRingType "R"
+  let t = mkUnqualInt rTy
   let uintTy = mkQualifiedL t mkPost dom l
-  let scheme = mkScheme [domVar, nVar] [PredField nTy l] $ mkFunArgs [uintTy] mkTypeUnit
+  let scheme = mkScheme [domVar, rVar] [PredPostRing rTy l] $ mkFunArgs [uintTy] mkTypeUnit
   return scheme
 
 mkCircuitCall :: TcM (TypeScheme Var)
@@ -174,7 +185,7 @@ mkCircuitCall = do
   (domVar, dom) <- freshDomainType "D"
   (stageVar, stage) <- freshStageType "S"
   (nVar, nTy) <- freshNatType "N"
-  let t = mkUnqualBool nTy
+  let t = mkUnqualBin (mkPlain nTy)
   let ty = mkQualifiedL t stage dom l
   let listlist = mkTypeList (mkTypeList ty mkPublicDomain) mkPublicDomain
   let callType = mkFunArgs [mkTypeString, listlist] listlist
@@ -194,7 +205,7 @@ mkBitextractPreUint :: TcM (TypeScheme Var)
 mkBitextractPreUint = do
   l <- tcGetLoc
   (nVar, nTy) <- freshNatType "N"
-  let u = mkUnqualUInt nTy
+  let u = mkUnqualInt (mkPlain nTy)
   (domVar, dom) <- freshDomainType "D"
   let ty = mkQualifiedL u mkPre dom l
   let listt = mkTypeList ty mkPublicDomain
@@ -204,7 +215,7 @@ mkBitextractVecHelper :: TcM (TypeScheme Var)
 mkBitextractVecHelper = do
   l <- tcGetLoc
   (nVar, nTy) <- freshNatType "N"
-  let u = mkUnqualUInt nTy
+  let u = mkUnqualInt (mkPlain nTy)
   (domVar, dom) <- freshDomainType "D"
   let ty = mkQualifiedL u mkPost dom l
   let listt = mkTypeList ty mkPublicDomain
@@ -226,12 +237,12 @@ mkGetArg fun = do
 mkBoolNot :: TcM (TypeScheme Var)
 mkBoolNot = do
   l <- tcGetLoc
-  (nVar, nTy) <- freshNatType "N"
-  let b = mkUnqualBool nTy
+  (rVar, rTy) <- freshRingType "R"
+  let b = mkUnqualBin rTy
   (sVar, stage) <- freshStageType "S"
   (dVar, dom) <- freshDomainType "D"
   let boolTy = mkQualifiedL b stage dom l
-  return $ mkScheme [nVar, sVar, dVar] [] $ mkFunArgs [boolTy] boolTy
+  return $ mkScheme [rVar, sVar, dVar] [] $ mkFunArgs [boolTy] boolTy
 
 -- Array T => T $pre @D -> uint $pre @D
 mkLength :: TcM (TypeScheme Var)
@@ -366,7 +377,7 @@ mkArrayToPost = do
 mkArrayToProver :: TcM (TypeScheme Var)
 mkArrayToProver = do
   (nVar, nTy) <- freshNatType "N"
-  let u = mkUnqualUInt nTy
+  let u = mkUnqualInt (mkPlain nTy)
   let argElemTy = mkQualified u mkPost mkVerifierDomain
   let resElemTy = mkQualified u mkPost mkProverDomain
   let argTy = mkTypeArr argElemTy mkPublicDomain
@@ -385,33 +396,33 @@ mkMakeUnknown = do
 mkMakeNotUnknown :: TcM (TypeScheme Var)
 mkMakeNotUnknown = do
   l <- tcGetLoc
-  (nVar, nTy) <- freshNatType "N"
-  let u = mkUnqualUInt nTy
+  (rVar, rTy) <- freshRingType "R"
+  let u = mkUnqualInt rTy
   (domVar, dom) <- freshDomainType "D"
   let uintPost = mkQualifiedL u mkPost dom l
   let uintPre = mkQualifiedL u mkPre dom l
-  return $ mkScheme [nVar, domVar] [] (mkFunArgs [uintPost, uintPre] uintPost)
+  return $ mkScheme [rVar, domVar] [] (mkFunArgs [uintPost, uintPre] uintPost)
 
 mkUintNPreMatrixProd :: TcM (TypeScheme Var)
 mkUintNPreMatrixProd = do
   l <- tcGetLoc
-  (nVar, nTy) <- freshNatType "N"
-  let u = mkUnqualUInt nTy
+  (rVar, rTy) <- freshRingType "R"
+  let u = mkUnqualInt rTy
   (domVar, dom) <- freshDomainType "D"
   let uintPre = mkQualifiedL u mkPre dom l
   let listTy = mkTypeList uintPre mkPublicDomain
   let listListTy = mkTypeList listTy mkPublicDomain
-  return $ mkScheme [nVar, domVar] [] (mkFunArgs [listListTy, listListTy] listListTy)
+  return $ mkScheme [rVar, domVar] [] (mkFunArgs [listListTy, listListTy] listListTy)
 
 mkChallenge :: TcM (TypeScheme Var)
 mkChallenge = do
   l <- tcGetLoc
   let argTy = mkTypeUInt mkPre mkPublicDomain
-  (nVar, nTy) <- freshNatType "N"
-  let u = mkUnqualUInt nTy
+  (rVar, rTy) <- freshRingType "R"
+  let u = mkUnqualInt rTy
   let chalTy = mkQualified u mkPre mkVerifierDomain
   let resTy = mkTypeList chalTy mkPublicDomain
-  return $ mkScheme [nVar] [PredField nTy l, PredChallenge nTy l] (mkFunArgs [argTy] resTy)
+  return $ mkScheme [rVar] [PredPostRing rTy l, PredChallenge rTy l] (mkFunArgs [argTy] resTy)
 
 mkMakeWaksmanNetwork :: TcM (TypeScheme Var)
 mkMakeWaksmanNetwork = do
@@ -477,64 +488,64 @@ mkBitextract = do
   l <- tcGetLoc
   (nVar, n) <- freshNatType "N"
   (domVar, dom) <- freshDomainType "D"
-  let u = mkQualified (mkUnqualUInt n) mkPost dom
+  let u = mkQualified (mkUnqualInt (mkPlain n)) mkPost dom
   let arrTy = mkTypeArr u mkPublicDomain
-  return $ mkScheme [nVar, domVar] [PredField n l, PredExtendedArithmetic l] $ mkFunArgs [u] arrTy
+  return $ mkScheme [nVar, domVar] [predField n l, PredExtendedArithmetic l] $ mkFunArgs [u] arrTy
 
 mkAssertPerm :: TcM (TypeScheme Var)
 mkAssertPerm = do
   l <- tcGetLoc
   (nVar, n) <- freshNatType "N"
   (domVar, dom) <- freshDomainType "D"
-  let u = mkQualified (mkUnqualUInt n) mkPost dom
+  let u = mkQualified (mkUnqualInt (mkPlain n)) mkPost dom
   let arrTy = mkTypeArr u mkPublicDomain
-  return $ mkScheme [nVar, domVar] [PredField n l, PredPermutationCheck l] $ mkFunArgs [arrTy, arrTy] mkTypeUnit
+  return $ mkScheme [nVar, domVar] [predField n l, PredPermutationCheck l] $ mkFunArgs [arrTy, arrTy] mkTypeUnit
 
 mkBinArithVec :: TcM (TypeScheme Var)
 mkBinArithVec = do
   l <- tcGetLoc
   (nVar, n) <- freshNatType "N"
   (domVar, dom) <- freshDomainType "D"
-  let u = mkQualified (mkUnqualUInt n) mkPost dom
+  let u = mkQualified (mkUnqualInt (mkPlain n)) mkPost dom
   let arrTy = mkTypeArr u mkPublicDomain
-  return $ mkScheme [nVar, domVar] [PredField n l, PredVectors l] $ mkFunArgs [arrTy, arrTy] arrTy
+  return $ mkScheme [nVar, domVar] [predField n l, PredVectors l] $ mkFunArgs [arrTy, arrTy] arrTy
 
 mkBinArithVecC :: TcM (TypeScheme Var)
 mkBinArithVecC = do
   l <- tcGetLoc
   (nVar, n) <- freshNatType "N"
   (domVar, dom) <- freshDomainType "D"
-  let u = mkQualified (mkUnqualUInt n) mkPost dom
+  let u = mkQualified (mkUnqualInt (mkPlain n)) mkPost dom
   let arrTy = mkTypeArr u mkPublicDomain
-  let pubIntTy = mkPublic (mkUnqualUInt n)
-  return $ mkScheme [nVar, domVar] [PredField n l, PredVectors l] $ mkFunArgs [arrTy, pubIntTy] arrTy
+  let pubIntTy = mkPublic (mkUnqualInt (mkPlain n))
+  return $ mkScheme [nVar, domVar] [predField n l, PredVectors l] $ mkFunArgs [arrTy, pubIntTy] arrTy
 
 mkBinArithVecScalar :: TcM (TypeScheme Var)
 mkBinArithVecScalar = do
   l <- tcGetLoc
   (nVar, n) <- freshNatType "N"
   (domVar, dom) <- freshDomainType "D"
-  let u = mkQualified (mkUnqualUInt n) mkPost dom
+  let u = mkQualified (mkUnqualInt (mkPlain n)) mkPost dom
   let arrTy = mkTypeArr u mkPublicDomain
-  return $ mkScheme [nVar, domVar] [PredField n l, PredVectors l] $ mkFunArgs [arrTy, u] arrTy
+  return $ mkScheme [nVar, domVar] [predField n l, PredVectors l] $ mkFunArgs [arrTy, u] arrTy
 
 mkFoldVec :: TcM (TypeScheme Var)
 mkFoldVec = do
   l <- tcGetLoc
   (nVar, n) <- freshNatType "N"
   (domVar, dom) <- freshDomainType "D"
-  let u = mkQualified (mkUnqualUInt n) mkPost dom
+  let u = mkQualified (mkUnqualInt (mkPlain n)) mkPost dom
   let arrTy = mkTypeArr u mkPublicDomain
-  return $ mkScheme [nVar, domVar] [PredField n l, PredVectors l] $ mkFunArgs [arrTy] u
+  return $ mkScheme [nVar, domVar] [predField n l, PredVectors l] $ mkFunArgs [arrTy] u
 
 mkBinFoldVec :: TcM (TypeScheme Var)
 mkBinFoldVec = do
   l <- tcGetLoc
   (nVar, n) <- freshNatType "N"
   (domVar, dom) <- freshDomainType "D"
-  let u = mkQualified (mkUnqualUInt n) mkPost dom
+  let u = mkQualified (mkUnqualInt (mkPlain n)) mkPost dom
   let arrTy = mkTypeArr u mkPublicDomain
-  return $ mkScheme [nVar, domVar] [PredField n l, PredVectors l] $ mkFunArgs [arrTy, arrTy] u
+  return $ mkScheme [nVar, domVar] [predField n l, PredVectors l] $ mkFunArgs [arrTy, arrTy] u
 
 builtinTypes :: [(T.Text, BuiltinInfo, TcM (TypeScheme Var))]
 builtinTypes =

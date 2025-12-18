@@ -16,6 +16,7 @@ module Support.Pretty
    sep, cat, hcat, vcat, hsep,
    sep', cat', hcat', vcat', hsep',
    indent, hang, line, group,
+   viaShow,
    render, renderStrictText, renderLazyText,
    doubleQuotes, brackets, space, underscore
   )

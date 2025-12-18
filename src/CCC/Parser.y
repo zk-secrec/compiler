@@ -42,6 +42,7 @@ import Data.Text (Text)
     'field'                     { Located $$ TokField }
     'ext_field'                 { Located $$ TokExtField }
     'ring'                      { Located $$ TokRing }
+    'bitwise'                   { Located $$ TokBitwise }
     'less_than'                 { Located $$ TokLessThan }
     'greater_than'              { Located $$ TokGreaterThan }
     'equals'                    { Located $$ TokEquals }
@@ -57,7 +58,7 @@ import Data.Text (Text)
     '@constraint'               { Located $$ TokConstraint }
 
     IDENT                       { Located _ (TokId _) }
-    INT                         { Located _ (TokInt _) }
+    INT                         { Located _ (TokInteger _) }
     EOF                         { Located _ TokEOF }
 
 %%
@@ -129,6 +130,7 @@ TypeVariant :: { CCCType Text }
   | 'ext_field' '(' SepBy1(Int,',') ')' '(' SepBy(Predicate,',') ')' '(' SepBy(Predicate,',') ')' 
     { CCCExtField (reverse $3) (reverse $6) (reverse $9) }
   | 'ring' '(' SepBy(Predicate,',') ')' { CCCRing (reverse $3) }
+  | 'bitwise' '(' SepBy(Predicate,',') ')' { CCCBitwise (reverse $3) }
   | '@plugin' Identifier { CCCPluginType $2 }
 
 Type :: { Located (CCCType Text) }
@@ -181,10 +183,10 @@ nl = NoLocation
 --
 
 mkInteger :: LToken -> Located Integer
-mkInteger (Located l (TokInt n)) = Located l n
+mkInteger (Located l (TokInteger n)) = Located l n
 
 mkInt :: LToken -> Located Int
-mkInt (Located l (TokInt n)) = Located l (fromInteger n)
+mkInt (Located l (TokInteger n)) = Located l (fromInteger n)
 
 mkIdentifier :: LToken -> Located Text
 mkIdentifier (Located l (TokId x)) = Located l x

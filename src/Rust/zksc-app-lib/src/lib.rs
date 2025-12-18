@@ -37,6 +37,7 @@ mod circuit_parser;
 mod builtins;
 #[macro_use]
 mod generated;
+mod call_circom;
 mod externs;
 mod externs_header;
 mod externs_stdlib;

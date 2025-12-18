@@ -204,6 +204,7 @@ letInCoreExpr f (CeLoop loop) = CeLoop <$> case loop of
   CoreForExpr x y z lt -> CoreForExpr x y z <$> f lt
   CoreForever lt -> CoreForever <$> f lt
 letInCoreExpr f (CeZip ps lt) = CeZip ps <$> f lt
+letInCoreExpr f (CeTrace l s lt) = CeTrace l s <$> f lt
 letInCoreExpr _ e = pure e
 
 data IsLambda = IsLambda | NotLambda -- does this top-level function originate from a lambda

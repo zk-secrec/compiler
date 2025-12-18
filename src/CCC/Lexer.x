@@ -88,6 +88,7 @@ tokens :-
         "field"                     { tokSimple TokField }
         "ext_field"                 { tokSimple TokExtField }
         "ring"                      { tokSimple TokRing }
+        "bitwise"                   { tokSimple TokBitwise }
         "less_than"                 { tokSimple TokLessThan }
         "greater_than"              { tokSimple TokGreaterThan }
         "equals"                    { tokSimple TokEquals }
@@ -118,7 +119,7 @@ tokens :-
 {
 
 tokenInteger :: Integer -> Action LToken
-tokenInteger base loc buf len = fmap TokInt <$> tokInteger base loc buf len
+tokenInteger base loc buf len = fmap TokInteger <$> tokInteger base loc buf len
 
 tokenIdentifier :: Action LToken
 tokenIdentifier loc buf len = fmap TokId <$> tokText loc buf len

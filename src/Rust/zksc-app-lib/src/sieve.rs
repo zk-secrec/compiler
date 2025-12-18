@@ -12,6 +12,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::rc::Rc;
 use std::any::Any;
+use num_traits::{Zero, One};
 
 use crate::integer::*;
 use crate::value::Value;
@@ -172,6 +173,21 @@ pub enum WireOrConst<'a> {
     C(Integer),
 }
 
+pub enum WireOrConstOwned {
+    W(Wire),
+    C(Integer),
+}
+
+pub type LinearCombination<W> = Vec<(W, Integer)>;
+
+// R1CS constraint
+// a * b = c
+pub struct Constraint<W> {
+    pub a: LinearCombination<W>,
+    pub b: LinearCombination<W>,
+    pub c: LinearCombination<W>,
+}
+
 pub trait SIEVEIR {
     /// Write SIEVE IR headers if they could not be written yet
     /// when the struct implementing this trait was allocated.
@@ -256,11 +272,74 @@ pub trait SIEVEIR {
     /// Modular addition.
     fn add(&self, m: &NatType, w1: &Wire, w2: &Wire) -> Wire;
 
+    /// Modular subtraction.
+    /// Some backends may support it more efficiently than multiplying by -1 and adding.
+    /// Multiplying by -1 can be slow for large moduli.
+    fn sub(&self, m: &NatType, w1: &Wire, w2: &Wire) -> Wire {
+        let modulus = match m.modulus {
+            Some(ref m) => m,
+            _ => panic!("Infinite modulus not supported in $post"),
+        };
+        let w2_neg = self.mulc(m, w2, &(modulus - 1));
+        self.add(m, w1, &w2_neg)
+    }
+
     /// Modular multiplication between value on wire and constant value.
     fn mulc(&self, m: &NatType, w1: &Wire, c2: &Integer) -> Wire;
 
+    /// Modular multiplication between value on wire and a verifier's value.
+    fn mulv(&self, _m: &NatType, _w1: &Wire, _c2: &Value) -> Wire {
+        unimplemented!("Backend does not support mulv.")
+    }
+
     /// Modular addition between value on wire and constant value.
     fn addc(&self, m: &NatType, w1: &Wire, c2: &Integer) -> Wire;
+
+    /// Modular subtraction of a value on wire from a constant value.
+    fn subc(&self, m: &NatType, c1: &Integer, w2: &Wire) -> Wire {
+        let modulus = match m.modulus {
+            Some(ref m) => m,
+            _ => panic!("Infinite modulus not supported in $post"),
+        };
+        let w2_neg = self.mulc(m, w2, &(modulus - 1));
+        self.addc(m, &w2_neg, c1)
+    }
+
+    /// Bitwise shift left of a wire by a constant value.
+    fn shlc(&self, _m: &NatType, _w1: &Wire, _c2: u64) -> Wire {
+        unimplemented!("Backend does not support bitwise shifts.")
+    }
+
+    /// Bitwise shift right of a wire by a constant value.
+    fn shrc(&self, _m: &NatType, _w1: &Wire, _c2: u64) -> Wire {
+        unimplemented!("Backend does not support bitwise shifts.")
+    }
+
+    /// Converts a vector of bitwise elements from one bitwise ring to another.
+    /// The conversion is big-endian, i.e. the first element of the smaller ring
+    /// corresponds to the highest bits of the first element of the larger ring.
+    /// If the total number of bits in the first vector is not a multiple of
+    /// the number of bits in the seconds ring then the last element of the output vector
+    /// is padded with zeros as the lowest bits.
+    fn bitwise_vec_to_bitwise_vec(&self, _m1: &NatType, _m2: &NatType, _wr1: &WireRange) -> WireRange {
+        unimplemented!("Backend does not support bitwise vector conversion.")
+    }
+
+    /// Transposes a bit matrix `wr1` of `nr` values of `nc` bits each
+    /// into a transposed bit matrix of `nc` values of `nr` bits each.
+    fn bit_matrix_transpose(&self, _m1: &NatType, _m2: &NatType, _wr1: &WireRange, _nr: u64, _nc: u64) -> WireRange {
+        unimplemented!("Backend does not support bit matrix transposition.")
+    }
+
+    /// Concatenates two vectors, obtaining a new vector.
+    fn concat_vec(&self, _m: &NatType, _wr1: &WireRange, _wr2: &WireRange) -> WireRange {
+        unimplemented!("Backend does not support vector concatenation.")
+    }
+
+    /// ECDSA verification. Some inputs are read from instance.
+    fn ecdsa_verification(&self, _m: &NatType, _bits_per_block: u64, _scalar1: &Wire, _scalar2: &Wire, _r_x: &Wire, _r_y: &Wire) {
+        unimplemented!("Backend does not support ECDSA verification.")
+    }
 
     /// Assert that the value on the wire is zero.
     fn assert_zero(&self, m: &NatType, w: &Wire);
@@ -341,6 +420,71 @@ pub trait SIEVEIR {
     /// value(w1) = value(wires[0]) + 2*value(wires[1]) + 4*value(wires[2]) + ...
     /// Used for more efficiently implemement booleans circuit evaluation.
     fn assert_eq_scalar_vec(&self, m1: &NatType, w1: &Wire, m2: &NatType, wires: Vec<Wire>);
+
+    /// This should return true if the backend supports assert_eq for arguments of rings `m1` and `m2`
+    /// but not direct conversion from `m1` to `m2`.
+    /// Then the direct conversion will be automatically implemented thru assert_eq.
+    fn ring_switch_thru_assert_eq(&self, _m1: &NatType, _m2: &NatType) -> bool {
+        return false;
+    }
+
+    /// Helper method for assert_r1cs_constraint.
+    fn add_wocs(&self, m: &NatType, woc1: WireOrConstOwned, woc2: WireOrConstOwned) -> WireOrConstOwned {
+        match (woc1, woc2) {
+            (WireOrConstOwned::W(w1), WireOrConstOwned::W(w2)) => WireOrConstOwned::W(self.add(m, &w1, &w2)),
+            (WireOrConstOwned::W(w1), WireOrConstOwned::C(c2)) => WireOrConstOwned::W(if c2.is_zero() { w1 } else { self.addc(m, &w1, &c2) }),
+            (WireOrConstOwned::C(c1), WireOrConstOwned::W(w2)) => WireOrConstOwned::W(if c1.is_zero() { w2 } else { self.addc(m, &w2, &c1) }),
+            (WireOrConstOwned::C(c1), WireOrConstOwned::C(c2)) => WireOrConstOwned::C((c1 + c2) % m.modulus.as_ref().unwrap()),
+        }
+    }
+
+    /// Helper method for assert_r1cs_constraint.
+    fn sub_or_negated_sub_wocs(&self, m: &NatType, woc1: WireOrConstOwned, woc2: WireOrConstOwned) -> WireOrConstOwned {
+        let modulus = m.modulus.as_ref().unwrap();
+        match (woc1, woc2) {
+            (WireOrConstOwned::W(w1), WireOrConstOwned::W(w2)) => WireOrConstOwned::W(self.sub(m, &w1, &w2)),
+            (WireOrConstOwned::W(w1), WireOrConstOwned::C(c2)) => WireOrConstOwned::W(if c2.is_zero() { w1 } else { self.addc(m, &w1, &((modulus - c2) % modulus)) }),
+            (WireOrConstOwned::C(c1), WireOrConstOwned::W(w2)) => WireOrConstOwned::W(if c1.is_zero() { w2 } else { self.addc(m, &w2, &((modulus - c1) % modulus)) }), // negated sub here, as it is more efficient
+            (WireOrConstOwned::C(c1), WireOrConstOwned::C(c2)) => WireOrConstOwned::C((modulus + c1 - c2) % modulus),
+        }
+    }
+
+    /// Helper method for assert_r1cs_constraint.
+    fn mul_wocs(&self, m: &NatType, woc1: WireOrConstOwned, woc2: WireOrConstOwned) -> WireOrConstOwned {
+        match (woc1, woc2) {
+            (WireOrConstOwned::W(w1), WireOrConstOwned::W(w2)) => WireOrConstOwned::W(self.mul(m, &w1, &w2)),
+            (WireOrConstOwned::W(w1), WireOrConstOwned::C(c2)) => WireOrConstOwned::W(if c2.is_one() { w1 } else { self.mulc(m, &w1, &c2) }),
+            (WireOrConstOwned::C(c1), WireOrConstOwned::W(w2)) => WireOrConstOwned::W(if c1.is_one() { w2 } else { self.mulc(m, &w2, &c1) }),
+            (WireOrConstOwned::C(c1), WireOrConstOwned::C(c2)) => WireOrConstOwned::C((c1 * c2) % m.modulus.as_ref().unwrap()),
+        }
+    }
+
+    /// Helper method for assert_r1cs_constraint.
+    fn compute_linear_combination(&self, m: &NatType, lc: &LinearCombination<Option<Wire>>) -> WireOrConstOwned {
+        let mut sum = WireOrConstOwned::C(Integer::zero());
+        for (w, c) in lc {
+            let x = match w {
+                None => WireOrConstOwned::C(c.clone()),
+                Some(w) => WireOrConstOwned::W(if c.is_one() { w.clone() } else { self.mulc(m, w, c) }),
+            };
+            sum = self.add_wocs(m, sum, x);
+        }
+        sum
+    }
+
+    /// Assert that an R1CS constraint over wires (and the constant 1) holds.
+    /// Each wire w is wrapped into Some(w).
+    /// None represents the constant 1.
+    fn assert_r1cs_constraint(&self, m: &NatType, c: &Constraint<Option<Wire>>) {
+        let x1 = self.compute_linear_combination(m, &c.a);
+        let x2 = self.compute_linear_combination(m, &c.b);
+        let x3 = self.compute_linear_combination(m, &c.c);
+        let x = self.sub_or_negated_sub_wocs(m, self.mul_wocs(m, x1, x2), x3);
+        match x {
+            WireOrConstOwned::W(x) => self.assert_zero(m, &x),
+            WireOrConstOwned::C(c) => assert!(c.is_zero()),
+        }
+    }
 
     /// Switch the field of `w1` to new modulus `m`.
     /// For conversion of boolean to uint we use bool2int calls instead.

@@ -180,7 +180,7 @@ fn sizeasserter_finalize_arya_helper[N : Nat]
 , vals_pre : list[uint[N] $pre @prover]
 , ref sizeasserter : SizeAsserter[N, $post, @prover]
 )
-where Field[N], Challenge[N], Vectorization
+where Field[N], Challenge[plain[N]], Vectorization
 { if (n > 0)
       { dbg_print("Finalizing Arya SizeAsserter with " ++ (to_string(length(sizeasserter.vals)) ++ (" value" ++ ((if (n == 1) { "" } else { "s" }) ++ (" and bit width " ++ to_string(sizeasserter.bw))))))
       ; let logN = log2(N)
@@ -326,7 +326,7 @@ where Field[N], Challenge[N], Vectorization
 fn sizeasserter_finalize_arya[N : Nat, $S, @D]
 ( ref sizeasserter : SizeAsserter[N, $S, @D]
 )
-where Field[N], Challenge[N], Vectorization
+where Field[N], Challenge[plain[N]], Vectorization
 { let n = length(sizeasserter.vals)
 ; let vals_pre = uint_list_to_pre(sizeasserter.vals)
 ; if (post $S)
@@ -348,7 +348,7 @@ fn sizeasserter_finalize[N : Nat, $S, @D]
 ( ref sizeasserter : SizeAsserter[N, $S, @D]
 )
 where Field[N], Vectorization
-{ if (Challenge[N]) { sizeasserter_finalize_arya(ref sizeasserter) }
+{ if (Challenge[plain[N]]) { sizeasserter_finalize_arya(ref sizeasserter) }
   else { sizeasserter_finalize_classic(ref sizeasserter) }
 }
 

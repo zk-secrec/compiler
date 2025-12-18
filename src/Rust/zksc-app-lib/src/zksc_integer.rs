@@ -8,10 +8,11 @@
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
- use std::fmt;
+use std::fmt;
 use std::fmt::Display;
 
 use crate::zksc_types::NatType;
+use crate::zksc_types::RingType::*;
 use crate::value::*;
 use num_bigint::{BigInt,Sign::Plus};
 use num_integer::Integer;
@@ -58,6 +59,7 @@ macro_rules! small_modulus_nattype {
     ($typename:tt,$value_type:tt,$modulus:literal) => {
         NatType {
             tag : $typename :: TAG - BigInt :: TAG,
+            ring_type : RingAdditive,
             modulus : Some({
                 const modulus_value : u128 = $modulus;
                 BigInt::from(modulus_value)
@@ -151,6 +153,7 @@ macro_rules! fixed_modulus_nattype {
     ($typename:tt) => {
         NatType {
             tag : $typename :: TAG - BigInt :: TAG,
+            ring_type : RingAdditive,
             modulus : Some($typename::modulus().clone()),
             modulus_value : || { Value::new::<BigInt>($typename::modulus().clone())},
             is_zero : |x| {x.unwrap::<$typename>().value.is_zero()},
@@ -206,10 +209,66 @@ macro_rules! fixed_modulus_nattype {
     }
 }
 
+// n-bit integers with bitwise operations (add/sub = bitwise xor, mul = bitwise and), $typename::modulus() is the number of bits, the actual modulus is 1 << $typename::modulus()
+#[macro_export]
+macro_rules! fixed_modulus_bitwise_nattype {
+    ($typename:tt) => {
+        NatType {
+            tag : $typename :: TAG - BigInt :: TAG,
+            ring_type : RingBitwise,
+            modulus : Some($typename::modulus().clone()),
+            modulus_value : || { Value::new::<BigInt>($typename::modulus().clone())},
+            is_zero : |x| {x.unwrap::<$typename>().value.is_zero()},
+            is_one : |x| {x.unwrap::<$typename>().value.is_one()},
+            eq : |x,y| {x.unwrap::<$typename>().value == y.unwrap::<$typename>().value},
+            lt : |x,y| {x.unwrap::<$typename>().value < y.unwrap::<$typename>().value},
+            add : |x,y| {
+                let value = &x.unwrap::<$typename>().value ^ &y.unwrap::<$typename>().value;
+                Value::new::<$typename>($typename {value})
+            },
+            mul : |x,y| {
+                let value = &x.unwrap::<$typename>().value & &y.unwrap::<$typename>().value;
+                Value::new::<$typename>($typename {value})
+            },
+            sub : |x,y| {
+                let value = &x.unwrap::<$typename>().value ^ &y.unwrap::<$typename>().value;
+                Value::new::<$typename>($typename {value})
+            },
+            div : |x,y| {
+                panic!("division not supported for bitwise rings")
+            },
+            hmod : |x,y| {
+                panic!("hmod not supported for bitwise rings")
+            },
+            mod_div : |x,y| {
+                panic!("mod_div not supported for bitwise rings")
+            },
+            to_bigint : |x| {
+                x.unwrap::<$typename>().value.clone()
+            },
+            from_bigint : |x| {
+                use num_traits::ToPrimitive;
+                let m: BigInt = BigInt::one() << $typename::modulus().to_usize().unwrap();
+                let v1 = x.clone() % &m;
+                let v2 = if v1.sign()==Sign::Minus {v1 + m} else {v1};
+                Value::new::<$typename>($typename {value : (v2)})
+            },
+            fmt: |x, f| {
+                match x.view() {
+                    ValueView::Bool(b) => if *b { write!(f, "1") } else { write!(f, "0") } ,
+                    ValueView::ZkscDefined() => { write!(f, "{}", x.unwrap::<$typename>().value) },
+                    _ => panic!("fixed_modulus_bitwise_nattype.to_string didn't get bool or own type",)
+                }
+            },
+        }
+    }
+}
+
 // u8
 pub fn nattype_256(tag : u64) -> NatType {
     NatType {
         tag : tag,
+        ring_type : RingAdditive,
         modulus : Some(BigInt::from(256u64)),
         modulus_value : || {panic!("modulus_value called on u8 modulus")},
         is_zero : |x| {x.unwrap::<u8>().is_zero()},
@@ -259,6 +318,7 @@ pub fn nattype_256(tag : u64) -> NatType {
 pub fn nattype_65536(tag : u64) -> NatType {
     NatType {
         tag : tag,
+        ring_type : RingAdditive,
         modulus : Some(BigInt::from(65536u64)),
         modulus_value : || {panic!("modulus_value called on u16 modulus")},
         is_zero : |x| {x.unwrap::<u16>().is_zero()},
@@ -308,6 +368,7 @@ pub fn nattype_65536(tag : u64) -> NatType {
 pub fn nattype_4294967296(tag : u64) -> NatType {
     NatType {
         tag : tag,
+        ring_type : RingAdditive,
         modulus : Some(BigInt::from(4294967296u64)),
         modulus_value : || {panic!("modulus_value called on u32 modulus")},
         is_zero : |x| {x.unwrap::<u32>().is_zero()},
@@ -357,6 +418,7 @@ pub fn nattype_4294967296(tag : u64) -> NatType {
 pub fn nattype_18446744073709551616(tag : u64) -> NatType {
     NatType {
         tag : tag,
+        ring_type : RingAdditive,
         modulus : Some(BigInt::from(18446744073709551616u128)),
         modulus_value : || {panic!("modulus_value called on u64 modulus")},
         is_zero : |x| {x.unwrap::<u64>().is_zero()},
@@ -406,6 +468,7 @@ pub fn nattype_18446744073709551616(tag : u64) -> NatType {
 pub fn nattype_340282366920938463463374607431768211456(tag : u64) -> NatType {
     NatType {
         tag : tag,
+        ring_type : RingAdditive,
         modulus : Some(BigInt::from(340282366920938463463374607431768211455u128) + 1),
         modulus_value : || {panic!("modulus_value called on u128 modulus")},
         is_zero : |x| {x.unwrap::<u128>().is_zero()},
@@ -454,6 +517,7 @@ pub fn nattype_340282366920938463463374607431768211456(tag : u64) -> NatType {
 pub fn infinite_nattype() -> NatType {
     NatType {
         tag : 0,
+        ring_type : RingAdditive,
         modulus : None,
         modulus_value : || {panic!("modulus_value called on infinite modulus")},
         is_zero : |x| {x.unwrap::<BigInt>().is_zero()},
@@ -482,6 +546,52 @@ pub fn infinite_nattype() -> NatType {
         },
         mod_div : |_x, _y| {
             panic!("infinite modulus not supported for mod_div")
+        },
+        to_bigint : |x| {x.unwrap::<BigInt>().clone()},
+        from_bigint : |x| {Value::new::<BigInt>(x.clone())},
+        fmt: |x, f| {
+            match x.view() {
+                ValueView::Bool(b) => if *b { write!(f, "1") } else { write!(f, "0") } ,
+                ValueView::ZkscDefined() => { write!(f, "{}", x.unwrap::<BigInt>()) },
+                _ => panic!("BigInt.to_string didn't get bool or own type",)
+            }
+        }
+    }
+}
+
+pub struct BitwiseBigInt(BigInt);
+
+pub fn infinite_bitwise_nattype(tag : u64) -> NatType {
+    NatType {
+        tag : tag,
+        ring_type : RingBitwise,
+        modulus : None,
+        modulus_value : || {panic!("modulus_value called on infinite modulus")},
+        is_zero : |x| {x.unwrap::<BigInt>().is_zero()},
+        is_one : |x| {x.unwrap::<BigInt>().is_one()},
+        eq : |x,y| {
+            x.unwrap::<BigInt>() == y.unwrap::<BigInt>()
+        },
+        lt : |x,y| {
+            x.unwrap::<BigInt>() < y.unwrap::<BigInt>()
+        },
+        add : |x, y| {
+            Value::new::<BigInt>(x.unwrap::<BigInt>() ^ y.unwrap::<BigInt>())
+        },
+        mul : |x, y| {
+            Value::new::<BigInt>(x.unwrap::<BigInt>() & y.unwrap::<BigInt>())
+        },
+        sub : |x, y| {
+            Value::new::<BigInt>(x.unwrap::<BigInt>() ^ y.unwrap::<BigInt>())
+        },
+        div : |_x,_y| {
+            panic!("division not supported for bitwise rings")
+        },
+        hmod : |_x,_y| {
+            panic!("hmod not supported for bitwise rings")
+        },
+        mod_div : |_x,_y| {
+            panic!("mod_div not supported for bitwise rings")
         },
         to_bigint : |x| {x.unwrap::<BigInt>().clone()},
         from_bigint : |x| {Value::new::<BigInt>(x.clone())},

@@ -2,7 +2,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
-module ConfigurationCheck (checkConfiguration, fieldIxs, TestData(..)) where
+{-# LANGUAGE DeriveTraversable #-}
+module ConfigurationCheck (checkConfiguration, typeIxs, RCon(..), MainRing(..), TestData(..)) where
 
 
 import Control.Lens
@@ -17,9 +18,9 @@ import qualified Data.Text as T (Text)
 import Basic.Name (Name, mainFName)
 import Basic.Var (Var, varName, tyVarKind)
 import Basic.Location
-import CCC.Checks (checkFieldPreds)
+import CCC.Checks (checkFieldPreds, checkBitwisePreds)
 import CCC.Syntax (Versioned(..), CCC(..), CCCType(..), CCCChallenge(..), CCCConversion(..), CCCPlugin(..))
-import Support.Pretty (Pretty(..), Doc, render, (<+>), ($$), vcat)
+import Support.Pretty (Pretty(..), Doc, render, (<+>), ($$), vcat, viaShow, parens)
 import Support.UniqMap (UniqMap, fromListUM, findUM, adjustUM)
 import Support.Unique (Uniquable)
 import Typing.Type
@@ -28,25 +29,36 @@ import Typing.Typing (TypedProgram(..), TypedDefault(..), findFunType)
 import CompilerException
 
 
+data RCon
+  = Plain
+  | Bitwise
+  deriving (Show, Eq, Ord)
+data MainTypeArg
+  = Known Integer
+  | Unknown Name
+  deriving (Eq)
+data MainRing a
+  = MR
+    { _rcon :: RCon
+    , _arg  :: a
+    }
+  deriving (Eq, Ord, Functor, Foldable, Traversable)
+
 data TestData
   = TestData
-    { _supportedFields     :: [Integer] -- fields that are needed in the program and supported by CCC
-    , _supportedChallenges :: [Integer] -- fields where challenges are needed in the program and supported by CCC
-    , _supportedConverts   :: [(Integer , Integer)] -- field pairs between which conversions are needed in the program and supported by CCC
+    { _supportedRings      :: [MainRing Integer]   -- rings that are needed in the program and supported by CCC
+    , _supportedChallenges :: [MainRing Integer]   -- rings where challenges are needed in the program and supported by CCC
+    , _supportedConverts   :: [(MainRing Integer , MainRing Integer)] -- ring pairs between which conversions are needed in the program and supported by CCC
     , _supportedPlugins    :: [[Versioned T.Text]] -- plugins that are needed in the program and supported by CCC
                                                    -- grouped by plugin families differing by version only
                                                    -- increasingly sorted by version in each family
     , _mainTypeParamsEval  :: UniqMap (Located Integer) -- evaluation of the type parameters of the main function
     }
-data MainTypeArg
-  = Known Integer
-  | Unknown Name
-  deriving (Eq)
 data PredData
   = PredData
-    { _fields     :: [Located MainTypeArg]
-    , _challenges :: [Located MainTypeArg]
-    , _converts   :: [Located (MainTypeArg, MainTypeArg)]
+    { _types      :: [Located (MainRing MainTypeArg)]
+    , _challenges :: [Located (MainRing MainTypeArg)]
+    , _converts   :: [Located (MainRing MainTypeArg, MainRing MainTypeArg)]
     , _plugins    :: [Located T.Text]
     }
 data MainPred
@@ -62,11 +74,12 @@ emptyPredData
   :: PredData
 emptyPredData
   = PredData
-    { _fields     = []
+    { _types      = []
     , _challenges = []
     , _converts   = []
     , _plugins    = []
     }
+
 
 instance Pretty MainTypeArg where
   
@@ -76,14 +89,42 @@ instance Pretty MainTypeArg where
     = "Unknown" <+> pretty x
   
 
-findMainTypeArg
-  :: Type Var -> Maybe MainTypeArg
-findMainTypeArg (TNat (Finite n))
-  = Just (Known (toInteger n))
-findMainTypeArg (TVar var _ _)
-  = Just (Unknown (varName var))
-findMainTypeArg _
-  = Nothing
+instance (Pretty a) => Pretty (MainRing a) where
+  
+  pretty mr
+    = "MR" <+> viaShow (_rcon mr) <+> parens (pretty (_arg mr))
+  
+
+checkPreds
+  :: MainRing Integer -> Located (CCCType a) -> Bool
+checkPreds mr
+  = case _rcon mr of
+      Plain
+        -> checkFieldPreds (_arg mr)
+      _ -> checkBitwisePreds (_arg mr)
+
+findMainRing
+  :: RingType Var -> Maybe (MainRing MainTypeArg)
+findMainRing t
+  = let
+      outer
+        = case t of
+            TPlain _
+              -> Just Plain
+            TBitwise _
+              -> Just Bitwise
+            _ -> Nothing
+      inner
+        = do
+            nat <- natOfRing t
+            case nat of
+              (TNat (Finite n))
+                -> Just (Known (toInteger n))
+              (TVar var _ _)
+                -> Just (Unknown (varName var))
+              _ -> Nothing
+    in
+    MR <$> outer <*> inner
 
 lookupKnown
   :: MainTypeArg -> Maybe Integer
@@ -118,46 +159,46 @@ sortWithoutRepOn f
 
 collectAll
   :: (Ord a)
-  => (MainTypeArg -> Maybe a) -> MainPred -> [Located a]
+  => (MainTypeArg -> Maybe a) -> MainPred -> [Located (MainRing a)]
 collectAll lookup mp
   = let
       find preddata
         = let
-            fields = mapMaybe (traverse lookup) $ _fields preddata
-            challenges = mapMaybe (traverse lookup) $ _challenges preddata
-            converts = mapMaybe (traverse lookup) . fmap noLoc . uncurry (++) . unzip . fmap unLocated $ _converts preddata
+            types = mapMaybe (traverse (traverse lookup)) $ _types preddata
+            challenges = mapMaybe (traverse (traverse lookup)) $ _challenges preddata
+            converts = mapMaybe (traverse (traverse lookup)) . fmap noLoc . uncurry (++) . unzip . fmap unLocated $ _converts preddata
           in
-          fields ++ challenges ++ converts
+          types ++ challenges ++ converts
     in
     sortWithoutRepOn unLocated $ find (_assumed mp) ++ find (_tested mp)
 
-collectFields
-  :: (MainTypeArg -> Maybe a) -> PredData -> [Located a]
-collectFields lookup preddata
-  = mapMaybe (traverse lookup) $ _fields preddata
+collectTypes
+  :: (MainTypeArg -> Maybe a) -> PredData -> [Located (MainRing a)]
+collectTypes lookup preddata
+  = mapMaybe (traverse (traverse lookup)) $ _types preddata
 
 collectChallenges
-  :: (MainTypeArg -> Maybe a) -> PredData -> [Located a]
+  :: (MainTypeArg -> Maybe a) -> PredData -> [Located (MainRing a)]
 collectChallenges lookup preddata
-  = mapMaybe (traverse lookup) $ _challenges preddata
+  = mapMaybe (traverse (traverse lookup)) $ _challenges preddata
 
 collectConverts
-  :: (MainTypeArg -> Maybe a) -> PredData -> [Located (a , a)]
+  :: (MainTypeArg -> Maybe a) -> PredData -> [Located (MainRing a , MainRing a)]
 collectConverts lookup preddata
-  = mapMaybe (traverse (\ (x , y) -> (,) <$> lookup x <*> lookup y)) $ _converts preddata
+  = mapMaybe (traverse (\ (x , y) -> (,) <$> traverse lookup x <*> traverse lookup y)) $ _converts preddata
 
 collectConvertFromKnowns
-  :: (MainTypeArg -> Maybe a) -> PredData -> [Located (Integer , a)]
+  :: (MainTypeArg -> Maybe a) -> PredData -> [Located (MainRing Integer , MainRing a)]
 collectConvertFromKnowns lookup preddata
-  = mapMaybe (traverse (\ (x , y) -> (,) <$> lookupKnown x <*> lookup y)) $
-    filter (isKnown . fst . unLocated) $ 
+  = mapMaybe (traverse (\ (x , y) -> (,) <$> traverse lookupKnown x <*> traverse lookup y)) $
+    filter (isKnown . _arg . fst . unLocated) $ 
     _converts preddata
 
 collectConvertToKnowns
-  :: (MainTypeArg -> Maybe a) -> PredData -> [Located (a , Integer)]
+  :: (MainTypeArg -> Maybe a) -> PredData -> [Located (MainRing a , MainRing Integer)]
 collectConvertToKnowns lookup preddata
-  = mapMaybe (traverse (\ (x , y) -> (,) <$> lookup x <*> lookupKnown y)) $
-    filter (isKnown . snd . unLocated) $ 
+  = mapMaybe (traverse (\ (x , y) -> (,) <$> traverse lookup x <*> traverse lookupKnown y)) $
+    filter (isKnown . _arg . snd . unLocated) $ 
     _converts preddata
 
 classifyPredicates
@@ -166,15 +207,15 @@ classifyPredicates
   = let
       op pred (mainpred , otherpred)
         = case pred of
-            PredField t l
-              | Just mta <- findMainTypeArg t
-                -> (mainpred & assumed . fields %~ (Located l mta :) , otherpred)
+            PredPostRing t l
+              | Just mr <- findMainRing t
+                -> (mainpred & assumed . types %~ (Located l mr :) , otherpred)
+            PredPostConvertible t1 t2 l
+              | Just mr1 <- findMainRing t1, Just mr2 <- findMainRing t2
+                -> (mainpred & assumed . converts %~ (Located l (mr1 , mr2) :) , otherpred)
             PredChallenge t l
-              | Just mta <- findMainTypeArg t
-                -> (mainpred & assumed . challenges %~ (Located l mta :) , otherpred)
-            PredConvertible t1 t2 l
-              | Just mta1 <- findMainTypeArg t1, Just mta2 <- findMainTypeArg t2
-                -> (mainpred & assumed . converts %~ (Located l (mta1 , mta2) :) , otherpred)
+              | Just mr <- findMainRing t
+                -> (mainpred & assumed . challenges %~ (Located l mr :) , otherpred)
             PredExtendedArithmetic l
               -> (mainpred & assumed . plugins %~ (Located l "extended_arithmetic" :) , otherpred)
             PredPermutationCheck l
@@ -185,15 +226,15 @@ classifyPredicates
               -> (mainpred & assumed . plugins %~ (Located l "iter" :) , otherpred)
             PredObliviousChoice l
               -> (mainpred & assumed . plugins %~ (Located l "disjunction" :) , otherpred)
-            PredTestField t l
-              | Just mta <- findMainTypeArg t
-                -> (mainpred & tested . fields %~ (Located l mta :) , otherpred)
+            PredTestPostRing t l
+              | Just mr <- findMainRing t
+                -> (mainpred & tested . types %~ (Located l mr :) , otherpred)
+            PredTestPostConvertible t1 t2 l
+              | Just mr1 <- findMainRing t1, Just mr2 <- findMainRing t2
+                -> (mainpred & tested . converts %~ (Located l (mr1 , mr2) :) , otherpred)
             PredTestChallenge t l
-              | Just mta <- findMainTypeArg t
-                -> (mainpred & tested . challenges %~ (Located l mta :) , otherpred)
-            PredTestConvertible t1 t2 l
-              | Just mta1 <- findMainTypeArg t1, Just mta2 <- findMainTypeArg t2
-                -> (mainpred & tested . converts %~ (Located l (mta1 , mta2) :) , otherpred)
+              | Just mr <- findMainRing t
+                -> (mainpred & tested . challenges %~ (Located l mr :) , otherpred)
             PredTestExtendedArithmetic l
               -> (mainpred & tested . plugins %~ (Located l "extended_arithmetic" :) , otherpred)
             PredTestPermutationCheck l
@@ -207,28 +248,31 @@ classifyPredicates
     in
     foldr op e
 
-fieldIxs
-  :: Located Integer -> [Located (CCCType T.Text)] -> Located [Int]
-fieldIxs (Located l n) lfamilies
-  = Located l (findIndices (checkFieldPreds n) lfamilies)
+typeIxs
+  :: Located (MainRing Integer) -> [Located (CCCType T.Text)] -> Located [Int]
+typeIxs (Located l mr) lfamilies
+  = Located l (findIndices (checkPreds mr) lfamilies)
 
-fieldMap
-  :: [Located Integer] -> [Located (CCCType T.Text)] -> M.Map Integer (Located [Int]) 
-  -- the values are lists of indices of CCC types embracing the key field, along with the ZKSC file location of the main predicate on the field
-fieldMap lfields lfamilies
-  = M.fromList (fmap (\ lfield -> (unLocated lfield , fieldIxs lfield lfamilies)) lfields)
+typeMap
+  :: [Located (MainRing Integer)] -> [Located (CCCType T.Text)] -> M.Map (MainRing Integer) (Located [Int]) 
+  -- the values are lists of indices of CCC types embracing the key type, along with the ZKSC file location of the main predicate on the type
+typeMap ltypes lfamilies
+  = M.fromList $
+    fmap (\ ltype -> (unLocated ltype , typeIxs ltype lfamilies)) ltypes
 
 isChallengeSupported
   :: [Located CCCChallenge] -> (a -> [Int]) -> Located a -> Bool
-isChallengeSupported lcccchals findFieldIxs ln
-  = any (`elem` (findFieldIxs . unLocated) ln) . fmap (\ (Located _ (CCCChallenge (Located _ j))) -> j) $ lcccchals
+isChallengeSupported lcccchals findTypeIxs lt
+  = any (`elem` (findTypeIxs . unLocated) lt) . 
+    fmap (\ (Located _ (CCCChallenge (Located _ j))) -> j) $ 
+    lcccchals
 
 isConvertSupported
   :: [Located CCCConversion] -> (a -> [Int]) -> Located (a , a) -> Bool
-isConvertSupported lcccconverts findFieldIxs lpair
+isConvertSupported lcccconverts findTypeIxs lpair
   = let
       (iis , ois)
-        = bimap findFieldIxs findFieldIxs . unLocated $ lpair
+        = bimap findTypeIxs findTypeIxs . unLocated $ lpair
     in
     any (\ (oj , ij) -> elem ij iis && elem oj ois) .
     fmap (\ (Located _ (CCCConversion (Located _ oj) (Located _ ij))) -> (oj , ij)) $ 
@@ -237,27 +281,33 @@ isConvertSupported lcccconverts findFieldIxs lpair
 findPlugins
   :: [Located (CCCPlugin T.Text)] -> T.Text -> [Versioned T.Text]
 findPlugins lcccplugins name
-  = sortOn _versionedVer . filter (\ Versioned{..} -> _versionedName == name) . fmap (\ (Located _ (CCCPlugin (Located _ pl))) -> pl) $
+  = sortOn _versionedVer . 
+    filter (\ Versioned{..} -> _versionedName == name) . 
+    fmap (\ (Located _ (CCCPlugin (Located _ pl))) -> pl) $
     lcccplugins
 
-findSupportedFields
-  :: UniqMap (Located Integer) -> (Integer -> [Int]) -> PredData -> [Located Integer]
-findSupportedFields umap findFieldIxs
-  = filter (not . null . findFieldIxs . unLocated) . fmap (fmap (unLocated . flip findUM umap)) . collectFields lookupUnknown
+findSupportedRings
+  :: UniqMap (Located Integer) -> (MainRing Integer -> [Int]) -> PredData -> [Located (MainRing Integer)]
+findSupportedRings umap findTypeIxs
+  = filter (not . null . findTypeIxs . unLocated) . 
+    fmap (fmap (fmap (unLocated . flip findUM umap))) . 
+    collectTypes lookupUnknown
 
 findSupportedChallenges
-  :: UniqMap (Located Integer) -> [Located CCCChallenge] -> (Integer -> [Int]) -> PredData -> [Located Integer]
-findSupportedChallenges umap lcccchals findFieldIxs
-  = filter (isChallengeSupported lcccchals findFieldIxs) . fmap (fmap (unLocated . flip findUM umap)) . collectChallenges lookupUnknown
+  :: UniqMap (Located Integer) -> [Located CCCChallenge] -> (MainRing Integer -> [Int]) -> PredData -> [Located (MainRing Integer)]
+findSupportedChallenges umap lcccchals findTypeIxs
+  = filter (isChallengeSupported lcccchals findTypeIxs) . 
+    fmap (fmap (fmap (unLocated . flip findUM umap))) . 
+    collectChallenges lookupUnknown
 
 findSupportedConverts
-  :: UniqMap (Located Integer) -> [Located CCCConversion] -> (Integer -> [Int]) -> PredData -> [Located (Integer , Integer)]
-findSupportedConverts umap lcccconverts findFieldIxs preddata
+  :: UniqMap (Located Integer) -> [Located CCCConversion] -> (MainRing Integer -> [Int]) -> PredData -> [Located (MainRing Integer , MainRing Integer)]
+findSupportedConverts umap lcccconverts findTypeIxs preddata
   = let
       find2
-        = unLocated . flip findUM umap
+        = fmap (unLocated . flip findUM umap)
     in
-    filter (isConvertSupported lcccconverts findFieldIxs) $
+    filter (isConvertSupported lcccconverts findTypeIxs) $
     (fmap (fmap (bimap find2 find2)) . collectConverts lookupUnknown $ preddata) ++
     (fmap (fmap (bimap id find2)) . collectConvertFromKnowns lookupUnknown $ preddata) ++
     (fmap (fmap (bimap find2 id)) . collectConvertToKnowns lookupUnknown $ preddata)
@@ -282,7 +332,7 @@ liberalPlugins
   :: [T.Text]
 liberalPlugins
   = ["iter"]
-  
+
 checkConfiguration
   :: (MonadIO m)
   => TypedProgram -> CCC T.Text -> m TestData
@@ -291,10 +341,12 @@ checkConfiguration prog ccc
     = throw $ "Function main not found"
   | not . null . filter ((/= KindNat) . tyVarKind) $ _typeSchemeQuantifiers mainType
     = throw $ "Type arguments of kind other than Natural not allowed in main"
+  | not . null $ unknownBitwiseRings
+    = throw $ "The argument of the bitwise type constructor is not allowed to have an unknown value in main"
   | not . null $ otherpreds
     = throwAtLocations "Predicate not allowed in main" $ otherpreds
-  | not . null $ fieldChecksBlackList
-    = throwAtLocations "Field not supported by CCC" $ fieldChecksBlackList
+  | not . null $ typeChecksBlackList
+    = throwAtLocations "Type not supported by CCC" $ typeChecksBlackList
   | not . null $ challengeChecksBlackList
     = throwAtLocations "Challenge not supported by CCC" $ challengeChecksBlackList
   | not . null $ convertChecksBlackList
@@ -322,9 +374,9 @@ checkConfiguration prog ccc
         -}
         when (not (null pluginChecksGrayList)) $ printAtLocations "Plugin not supported by CCC" $ pluginChecksGrayList
         return $ TestData
-          { _supportedFields     = sortWithoutRep $
-                                   fmap unLocated (knownAssumedFields ++ knownTestedFields) ++ 
-                                   fmap unLocated (unknownAssumedFields ++ unknownTestedFields)
+          { _supportedRings      = sortWithoutRep $
+                                   fmap unLocated (knownAssumedRings ++ knownTestedRings) ++ 
+                                   fmap unLocated (unknownAssumedRings ++ unknownTestedRings)
           , _supportedChallenges = sortWithoutRep $ 
                                    fmap unLocated (knownAssumedChallenges ++ knownTestedChallenges) ++ 
                                    fmap unLocated (unknownAssumedChallenges ++ unknownTestedChallenges)
@@ -339,72 +391,73 @@ checkConfiguration prog ccc
       = findFunType mainFName $ prog
     (mainpred, otherpreds)
       = classifyPredicates $ _typeSchemePredicates mainType
-    knownNaturals
+    knownRings
       = collectAll lookupKnown mainpred
-    knownAssumedFields
-      = collectFields lookupKnown (_assumed mainpred)
+    knownAssumedRings
+      = collectTypes lookupKnown (_assumed mainpred)
     knownAssumedChallenges
       = collectChallenges lookupKnown (_assumed mainpred)
     knownAssumedConverts
       = collectConverts lookupKnown (_assumed mainpred)
-    unknownNaturals
-      = collectAll lookupUnknown mainpred
+    (unknownPlainRings , unknownBitwiseRings)
+      = partition ((Plain ==) . _rcon) (fmap unLocated (collectAll lookupUnknown mainpred))
+    unknownNaturals = fmap _arg unknownPlainRings
     defaults
       = _tDefaultFields . _tProgDefaults $ prog
-    fieldFamilyMap
-      = fieldMap (if null unknownNaturals then knownNaturals else knownNaturals ++ defaults) $ _cccTypes ccc
-    findFieldIxs
-      = unLocated . (M.!) fieldFamilyMap
-    fieldChecksBlackList
-      = filter (null . findFieldIxs . unLocated) $ knownAssumedFields
+    typeFamilyMap
+      = typeMap (if null unknownNaturals then knownRings else knownRings ++ fmap (fmap (MR Plain)) defaults) $ _cccTypes ccc
+    findTypeIxs
+      = unLocated . (M.!) typeFamilyMap
+    typeChecksBlackList
+      = filter (null . findTypeIxs . unLocated) $ knownAssumedRings
     challengeChecksBlackList
-      = filter (not . isChallengeSupported (_cccChallenges ccc) findFieldIxs) $ knownAssumedChallenges
+      = filter (not . isChallengeSupported (_cccChallenges ccc) findTypeIxs) $ knownAssumedChallenges
     convertChecksBlackList
-      = filter (not . isConvertSupported (_cccConversions ccc) findFieldIxs) $ knownAssumedConverts
+      = filter (not . isConvertSupported (_cccConversions ccc) findTypeIxs) $ knownAssumedConverts
     (pluginChecksGrayList , pluginChecksBlackList)
       = partition (flip elem liberalPlugins . unLocated) $ 
         filter (null . findPlugins (_cccPlugins ccc) . unLocated) $ 
         _plugins (_assumed mainpred)
-    knownTestedFields
-      = filter (not . null . findFieldIxs . unLocated) . collectFields lookupKnown $ _tested mainpred
+    knownTestedRings
+      = filter (not . null . findTypeIxs . unLocated) . collectTypes lookupKnown $ _tested mainpred
     knownTestedChallenges
-      = filter (isChallengeSupported (_cccChallenges ccc) findFieldIxs) . collectChallenges lookupKnown $ _tested mainpred
+      = filter (isChallengeSupported (_cccChallenges ccc) findTypeIxs) . collectChallenges lookupKnown $ _tested mainpred
     knownTestedConverts
-      = filter (isConvertSupported (_cccConversions ccc) findFieldIxs) . collectConverts lookupKnown $ _tested mainpred
+      = filter (isConvertSupported (_cccConversions ccc) findTypeIxs) . collectConverts lookupKnown $ _tested mainpred
     pluginWhiteList
       = fmap (findPlugins (_cccPlugins ccc) . unLocated) $ _plugins (_assumed mainpred) ++ _plugins (_tested mainpred)
     quantifierNames
       = fmap varName $ _typeSchemeQuantifiers mainType
     (evaluations , assumedQuintuple , testedTriple)
-      = buildMaps quantifierNames mainpred ccc defaults findFieldIxs
+      = buildMaps quantifierNames mainpred ccc defaults findTypeIxs
     (fieldNames , challengeNames , convertNames , convertFromKnownNames , convertToKnownNames)
       = assumedQuintuple
-    (supportedFieldMap , supportedChallengeMap , supportedConvertMap)
+    (supportedRingMap , supportedChallengeMap , supportedConvertMap)
       = testedTriple
     countSupportedPred (_umap , i)
-      = length ((IM.!) supportedFieldMap i) + length ((IM.!) supportedChallengeMap i) + length ((IM.!) supportedConvertMap i)
+      = length ((IM.!) supportedRingMap i) + length ((IM.!) supportedChallengeMap i) + length ((IM.!) supportedConvertMap i)
     (evaluation , bestIx)
       = last $ sortOn countSupportedPred $ zip evaluations [0 ..]
     find2
-      = unLocated . flip findUM evaluation
-    (unknownAssumedFields , unknownAssumedChallenges , unknownAssumedConverts)
-      = ( fieldNames <&> fmap find2 
-        , challengeNames <&> fmap find2 
+      = fmap (unLocated . flip findUM evaluation)
+    (unknownAssumedRings , unknownAssumedChallenges , unknownAssumedConverts)
+      = ( fieldNames <&> fmap find2
+        , challengeNames <&> fmap find2
         , (convertNames <&> fmap (bimap find2 find2)) ++ (convertFromKnownNames <&> fmap (bimap id find2)) ++ (convertToKnownNames <&> fmap (bimap find2 id))
         )
-    (unknownTestedFields , unknownTestedChallenges , unknownTestedConverts)
-      = ((IM.!) supportedFieldMap bestIx , (IM.!) supportedChallengeMap bestIx , (IM.!) supportedConvertMap bestIx)
+    (unknownTestedRings , unknownTestedChallenges , unknownTestedConverts)
+      = ((IM.!) supportedRingMap bestIx , (IM.!) supportedChallengeMap bestIx , (IM.!) supportedConvertMap bestIx)
 
 buildMaps
-  :: [Name] -> MainPred -> CCC T.Text -> [Located Integer] -> (Integer -> [Int]) -> 
+  :: [Name] -> MainPred -> CCC T.Text -> [Located Integer] -> (MainRing Integer -> [Int]) -> 
      ( [UniqMap (Located Integer)] 
-     , ([Located Name] , [Located Name] , [Located (Name , Name)] , [Located (Integer , Name)] , [Located (Name , Integer)]) 
-     , (IM.IntMap [Located Integer] , IM.IntMap [Located Integer] , IM.IntMap [Located (Integer , Integer)])
+     , ([Located (MainRing Name)] , [Located (MainRing Name)] , [Located (MainRing Name , MainRing Name)] , [Located (MainRing Integer , MainRing Name)] , [Located (MainRing Name , MainRing Integer)]) 
+     , (IM.IntMap [Located (MainRing Integer)] , IM.IntMap [Located (MainRing Integer)] , IM.IntMap [Located (MainRing Integer , MainRing Integer)])
      )
-buildMaps names mainpred ccc defaults findFieldIxs
+buildMaps names mainpred ccc defaults findTypeIxs
   = let
-      fieldNames
-        = collectFields lookupUnknown $ _assumed mainpred
+      typeNames
+        = collectTypes lookupUnknown $ _assumed mainpred
       challengeNames
         = collectChallenges lookupUnknown $ _assumed mainpred
       convertNames
@@ -414,36 +467,36 @@ buildMaps names mainpred ccc defaults findFieldIxs
       convertToKnownNames
         = collectConvertToKnowns lookupUnknown $ _assumed mainpred
       filterConvert mkPair
-        = filter (isConvertSupported (_cccConversions ccc) findFieldIxs . noLoc . mkPair . unLocated)
+        = filter (isConvertSupported (_cccConversions ccc) findTypeIxs . noLoc . mkPair . MR Plain . unLocated)
       listMap
         = -- filtering conversions from known to unknown
-          flip (foldr (\ (i , o) -> adjustUM (filterConvert (i ,)) o)) (fmap unLocated convertFromKnownNames) $ 
+          flip (foldr (\ (i , o) -> adjustUM (filterConvert (i ,)) (_arg o))) (fmap unLocated convertFromKnownNames) $ 
           
           -- filtering conversions from unknown to known
-          flip (foldr (\ (i , o) -> adjustUM (filterConvert (, o)) i)) (fmap unLocated convertToKnownNames) $
+          flip (foldr (\ (i , o) -> adjustUM (filterConvert (, o)) (_arg i))) (fmap unLocated convertToKnownNames) $
           
           -- filtering challenges
-          flip (foldr (adjustUM (filter (isChallengeSupported (_cccChallenges ccc) findFieldIxs)))) (fmap unLocated challengeNames) $
+          flip (foldr (adjustUM (filter (isChallengeSupported (_cccChallenges ccc) (findTypeIxs . MR Plain))) . _arg)) (fmap unLocated challengeNames) $
           
           -- filtering fields
-          flip (foldr (adjustUM (filter (not . null . findFieldIxs . unLocated)))) (fmap unLocated fieldNames) $ 
+          flip (foldr (adjustUM (filter (not . null . findTypeIxs . MR Plain . unLocated)) . _arg)) (fmap unLocated typeNames) $ 
           
           -- all defaults
           fromListUM (fmap (, defaults) names)
       mapList
         = sequenceMap names listMap
       evaluations
-        = filter (\ umap -> all (isConvertSupported (_cccConversions ccc) (findFieldIxs . unLocated . flip findUM umap)) convertNames) $
+        = filter (\ umap -> all (isConvertSupported (_cccConversions ccc) (findTypeIxs . fmap (unLocated . flip findUM umap))) convertNames) $
           mapList
-      supportedFieldMap
-        = forCollectingMaps evaluations $ \ umap -> findSupportedFields umap findFieldIxs $ _tested mainpred
+      supportedRingMap
+        = forCollectingMaps evaluations $ \ umap -> findSupportedRings umap findTypeIxs $ _tested mainpred
       supportedChallengeMap
-        = forCollectingMaps evaluations $ \ umap -> findSupportedChallenges umap (_cccChallenges ccc) findFieldIxs $ _tested mainpred
+        = forCollectingMaps evaluations $ \ umap -> findSupportedChallenges umap (_cccChallenges ccc) findTypeIxs $ _tested mainpred
       supportedConvertMap
-        = forCollectingMaps evaluations $ \ umap -> findSupportedConverts umap (_cccConversions ccc) findFieldIxs $ _tested mainpred
+        = forCollectingMaps evaluations $ \ umap -> findSupportedConverts umap (_cccConversions ccc) findTypeIxs $ _tested mainpred
     in
     ( evaluations
-    , (fieldNames , challengeNames , convertNames , convertFromKnownNames , convertToKnownNames)
-    , (supportedFieldMap , supportedChallengeMap , supportedConvertMap)
+    , (typeNames , challengeNames , convertNames , convertFromKnownNames , convertToKnownNames)
+    , (supportedRingMap , supportedChallengeMap , supportedConvertMap)
     )
 

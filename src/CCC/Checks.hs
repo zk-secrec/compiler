@@ -1,10 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
-module CCC.Checks (checkCCCSoundness, checkFieldPreds) where
+module CCC.Checks (checkCCCSoundness, checkFieldPreds, checkBitwisePreds) where
 
 
 import Control.Monad
 import Control.Monad.IO.Class
-import Data.IntSet (IntSet, fromAscList, member)
+-- import Data.IntSet (IntSet, fromAscList, member)
 
 import Basic.Location
 import CCC.Syntax
@@ -31,6 +31,8 @@ checkCCCTypes
                 extfieldBlacklist
                   = filter (not . (`elem` fs) . stripLocation) (_cccBaseFields extfield)
             CCCRing _
+              -> go (i + 1) fs rest
+            CCCBitwise _
               -> go (i + 1) fs rest
             CCCPluginType _
               -> go (i + 1) fs rest -- should we check plugin names?
@@ -76,12 +78,12 @@ checkCCCSoundness ccc
       let n = length (_cccTypes ccc)
       checkCCCChallenges n (_cccChallenges ccc)
       checkCCCConversions n (_cccConversions ccc)
-
+{-
 knownMersenneExps
   :: IntSet
 knownMersenneExps
   = fromAscList [2, 3, 5, 7, 13, 17, 19, 31, 61, 89, 107, 127, 521, 607, 1279, 2203, 2281, 3217, 4253, 4423, 9689, 9941, 11213, 19937, 21701, 23209, 44497, 86243, 110503, 132049, 216091, 756839, 859433, 1257787, 1398269, 2976221, 3021377, 6972593, 13466917, 20996011, 24036583, 25964951, 30402457, 32582657, 37156667, 42643801, 43112609, 57885161]
-
+-}
 extractExpOf2
   :: (Integral a)
   => a -> (Int , a)
@@ -96,9 +98,10 @@ extractExpOf2 n
       then (e + 1 , p)
       else (0 , n)
 
-checkFieldPred
+checkPred
   :: Integer -> Located CCCPred -> Bool
-checkFieldPred n (Located _ cccpred)
+  -- does not check primality
+checkPred n (Located _ cccpred)
   = case cccpred of
       CCCLT (Located _ m)
         -> n < m
@@ -108,24 +111,36 @@ checkFieldPred n (Located _ cccpred)
         -> n == m
       CCCMersenne
         -> let
-             (e , p)
+             (_e , p)
                = extractExpOf2 (n + 1)
            in
-           p == 1 && member e knownMersenneExps
-      CCCProth -- does not check primality
+           p == 1 -- && member e knownMersenneExps
+      CCCProth
         -> let
              (_ , p)
                = extractExpOf2 (n - 1)
            in
            p * p < n - 1
       CCCPow2
-        -> n == 2
+        -> let
+             (_ , p)
+               = extractExpOf2 n
+           in
+           p == 1
 
 checkFieldPreds
   :: Integer -> Located (CCCType a) -> Bool
 checkFieldPreds n (Located _ (CCCField lcccpreds))
-  = all (checkFieldPred n) lcccpreds
+  = all (checkPred n) lcccpreds
 checkFieldPreds _ _
   = False
+
+checkBitwisePreds
+  :: Integer -> Located (CCCType a) -> Bool
+checkBitwisePreds n (Located _ (CCCBitwise lcccpreds))
+  = all (checkPred n) lcccpreds
+checkBitwisePreds _ _
+  = False
+
 
 

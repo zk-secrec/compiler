@@ -732,15 +732,19 @@ impl SIEVEIR for IR0plus {
 
     fn get_instance_wr(&self, m: &NatType, n: usize) -> WireRange {
         let wr = self.new_wire_range(m, n);
-        self.out
-            .rel(format!("  {} <- @public({});", WR(&wr), ModulusFieldName(m)));
+        if n > 0 {
+            self.out
+                .rel(format!("  {} <- @public({});", WR(&wr), ModulusFieldName(m)));
+        }
         upcast_wr(wr)
     }
 
     fn get_witness_wr(&self, m: &NatType, n: usize) -> WireRange {
         let wr = self.new_wire_range(m, n);
-        self.out
-            .rel(format!("  {} <- @private({});", WR(&wr), ModulusFieldName(m)));
+        if n > 0 {
+            self.out
+                .rel(format!("  {} <- @private({});", WR(&wr), ModulusFieldName(m)));
+        }
         upcast_wr(wr)
     }
 

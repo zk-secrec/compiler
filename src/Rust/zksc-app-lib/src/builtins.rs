@@ -8,8 +8,6 @@
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-
-
 use crate::sieve::*;
 use crate::value::*;
 use crate::value_conversions::*;
@@ -264,7 +262,7 @@ fn get_pre_uint_inf(x: &Value) -> &BigInt {
 }
 
 // Get value of uint[N] $S @D
-fn get_pre_or_post_uint(m: &NatType, x: &Value) -> Integer {
+pub fn get_pre_or_post_uint(m: &NatType, x: &Value) -> Integer {
     match x.view() {
         ValueView::ZkscDefined() => (m.to_bigint)(x),
         ValueView::Post(_, x) => get_pre_or_post_uint(m, x),
@@ -466,7 +464,7 @@ fn is_const_or_pre(x: &Value) -> bool {
     }
 }
 
-fn is_int_const_or_pre(x: &Value) -> bool {
+pub fn is_int_const_or_pre(x: &Value) -> bool {
     match x.view() {
         ValueView::ZkscDefined() => true,
         ValueView::Unknown(_) => true,
@@ -603,17 +601,27 @@ gen_sieve_ir1e!();
 
 #[allow(unused)]
 pub fn pred_field(ctx: &ContextRef, m: &NatType) -> bool {
-    ctx.supported_fields.contains(m.modulus.as_ref().unwrap())
+    ctx.supported_fields.contains(&BigInt::from(m.tag))
+}
+
+#[allow(unused)]
+pub fn pred_post_ring(ctx: &ContextRef, m: &NatType) -> bool {
+    ctx.supported_fields.contains(&BigInt::from(m.tag))
 }
 
 #[allow(unused)]
 pub fn pred_challenge(ctx: &ContextRef, m: &NatType) -> bool {
-    ctx.supported_challenges.contains(m.modulus.as_ref().unwrap())
+    ctx.supported_challenges.contains(&BigInt::from(m.tag))
 }
 
 #[allow(unused)]
 pub fn pred_convertible(ctx: &ContextRef, m1: &NatType, m2: &NatType) -> bool {
-    ctx.supported_conversions.contains(&(m1.modulus.as_ref().unwrap().clone(), m2.modulus.as_ref().unwrap().clone()))
+    ctx.supported_conversions.contains(&(BigInt::from(m1.tag), BigInt::from(m2.tag)))
+}
+
+#[allow(unused)]
+pub fn pred_post_convertible(ctx: &ContextRef, m1: &NatType, m2: &NatType) -> bool {
+    ctx.supported_conversions.contains(&(BigInt::from(m1.tag), BigInt::from(m2.tag)))
 }
 
 #[allow(unused)]
@@ -1584,7 +1592,7 @@ pub fn make_not_unknown(
     }
 }
 
-fn get_int(x : &Value) -> &Value {
+pub fn get_int(x : &Value) -> &Value {
     match x.view() {
         ValueView::ZkscDefined() => x,
         ValueView::Post(_,v) => v,
@@ -1692,17 +1700,41 @@ pub fn cast_to_bool(ctx : &ContextRef, input_modulus: &NatType, x: &Value, outpu
 }
 
 #[allow(unused)]
-pub fn cast_to_uint(ctx : &ContextRef, input_modulus: &NatType, x: &Value, output_modulus: &NatType) -> Value {
+pub fn cast_to_uint(ctx : &ContextRef, stage: StageType, input_modulus: &NatType, x: &Value, output_modulus: &NatType) -> Value {
     match x.view() {
         ValueView::Unknown(_) => x.clone(),
         ValueView::ZkscDefined() => {
-            (output_modulus.from_bigint)(&(input_modulus.to_bigint)(x))
+            if stage == Post && ctx.inside_sieve_fn_call() && sieve_backend().ring_switch_thru_assert_eq(input_modulus, output_modulus) {
+                let res_pre = (output_modulus.from_bigint)(&(input_modulus.to_bigint)(x));
+                let res_post = wire_uint(ctx, output_modulus, Prover, &res_pre); // TODO: this is inefficient for non-Prover
+                res_post
+            } else {
+                (output_modulus.from_bigint)(&(input_modulus.to_bigint)(x))
+            }
         },
         ValueView::Bool(b) => (output_modulus.from_bigint)(&bool_to_uint(*b)),
         ValueView::Post(w, v) => match v.view() {
-            ValueView::Bool(_) => rep::Post::new(sieve_bool2int(ctx,input_modulus,w,output_modulus),cast_to_uint(ctx,input_modulus,v,output_modulus)),
-            ValueView::ZkscDefined() => rep::Post::new(sieve_int_field_switch(ctx,input_modulus,w, output_modulus),cast_to_uint(ctx,input_modulus,v,output_modulus)),
-            ValueView::Unknown(_) => rep::Post::new(sieve_int_field_switch(ctx,input_modulus,w, output_modulus), ctx.unknown.clone()),
+            ValueView::Bool(_) => rep::Post::new(sieve_bool2int(ctx,input_modulus,w,output_modulus),cast_to_uint(ctx,Pre,input_modulus,v,output_modulus)),
+            ValueView::ZkscDefined() => {
+                if sieve_backend().ring_switch_thru_assert_eq(input_modulus, output_modulus) {
+                    let res_pre = cast_to_uint(ctx,Pre,input_modulus,v,output_modulus);
+                    let res_post = wire_uint(ctx, output_modulus, Prover, &res_pre); // TODO: this is inefficient for non-Prover
+                    sieve_assert_eq(ctx, input_modulus, w, output_modulus, get_wire(&res_post));
+                    res_post
+                } else {
+                    rep::Post::new(sieve_int_field_switch(ctx,input_modulus,w, output_modulus),cast_to_uint(ctx,Pre,input_modulus,v,output_modulus))
+                }
+            }
+            ValueView::Unknown(_) => {
+                if sieve_backend().ring_switch_thru_assert_eq(input_modulus, output_modulus) {
+                    let res_pre = ctx.unknown.clone();
+                    let res_post = wire_uint(ctx, output_modulus, Prover, &res_pre); // TODO: this is inefficient for non-Prover
+                    sieve_assert_eq(ctx, input_modulus, w, output_modulus, get_wire(&res_post));
+                    res_post
+                } else {
+                    rep::Post::new(sieve_int_field_switch(ctx,input_modulus,w, output_modulus), ctx.unknown.clone())
+                }
+            }
             _ => zksc_panic!(ctx, "cast_to_uint {:?}",x)
         }
         _ => zksc_panic!(ctx, "cast_to_uint"),
@@ -1864,6 +1896,9 @@ pub fn sub(
     x0: &Value,
     y0: &Value,
 ) -> Value {
+    if m.ring_type == RingBitwise {
+        return add(ctx, m, s, d, x0, y0);
+    }
     let r = if is_unknown(x0) || is_unknown(y0) {
         ctx.unknown.clone()
     } else {
@@ -1881,8 +1916,7 @@ pub fn sub(
             (false, false) => {
                 let w1 = get_wire(x0);
                 let w2 = get_wire(y0);
-                let w2_neg = sieve_mulc(ctx, &m_orig, w2, &(modulus - 1));
-                let w = sieve_add(ctx, &m_orig, w1, &w2_neg);
+                let w = sieve_backend().sub(&m_orig, w1, w2);
                 rep::Post::new(w, r)
             }
             (false, _) => {
@@ -1895,8 +1929,7 @@ pub fn sub(
             (_, false) => {
                 let w2 = get_wire(y0);
                 let x = (m.to_bigint)(x0);
-                let w2_neg = sieve_mulc(ctx, &m_orig, w2, &(modulus - 1));
-                let w = sieve_addc(ctx, &m_orig, &w2_neg, &x);
+                let w = sieve_backend().subc(&m_orig, &x, w2);
                 rep::Post::new(w, r)
             }
             _ => r,
@@ -1974,7 +2007,10 @@ pub fn or(
     if NEED_REL && s == Post {
         let c1 = is_bool_const_or_pre(x0);
         let c2 = is_bool_const_or_pre(y0);
-        let m_orgin = &m;
+        let m_orig = &m;
+        if m.ring_type == RingBitwise {
+            todo!("Bitwise booleans not fully implemented yet");
+        }
         let m = match m.modulus {
             Some(ref m) => m,
             _ => zksc_panic!(ctx, "Infinite modulus not supported in $post"),
@@ -1985,15 +2021,15 @@ pub fn or(
             (false, false) => {
                 let w1 = get_wire(x0);
                 let w2 = get_wire(y0);
-                let w = if is_nat_boolean(m_orgin) {
-                    let x_xor_y = sieve_xor(ctx, m_orgin, w1, w2);
-                    let x_and_y = sieve_and(ctx, m_orgin, w1, w2);
-                    sieve_xor(ctx, m_orgin, &x_xor_y, &x_and_y)
+                let w = if is_nat_boolean(m_orig) {
+                    let x_xor_y = sieve_xor(ctx, m_orig, w1, w2);
+                    let x_and_y = sieve_and(ctx, m_orig, w1, w2);
+                    sieve_xor(ctx, m_orig, &x_xor_y, &x_and_y)
                 } else {
-                    let x_plus_y = sieve_add(ctx, m_orgin, w1, w2);
-                    let x_times_y = sieve_mul(ctx, m_orgin, w1, w2);
-                    let minus_x_times_y = sieve_mulc(ctx, m_orgin, &x_times_y, &(m - 1));
-                    sieve_add(ctx, m_orgin, &x_plus_y, &minus_x_times_y)
+                    let x_plus_y = sieve_add(ctx, m_orig, w1, w2);
+                    let x_times_y = sieve_mul(ctx, m_orig, w1, w2);
+                    let minus_x_times_y = sieve_mulc(ctx, m_orig, &x_times_y, &(m - 1));
+                    sieve_add(ctx, m_orig, &x_plus_y, &minus_x_times_y)
                 };
                 rep::Post::new(w, r)
             }
@@ -2060,6 +2096,9 @@ pub fn xor(
             let c1 = is_bool_const_or_pre(x0);
             let c2 = is_bool_const_or_pre(y0);
             let m_orig = m;
+            if m.ring_type == RingBitwise {
+                todo!("Bitwise booleans not fully implemented yet");
+            }
             let m = match m.modulus {
                 Some(ref m) => m,
                 _ => zksc_panic!(ctx, "Infinite modulus not supported in $post"),
@@ -2126,6 +2165,9 @@ pub fn not(
         } else {
             let c1 = is_bool_const_or_pre(x0);
             let m_orig = m;
+            if m.ring_type == RingBitwise {
+                todo!("Bitwise booleans not fully implemented yet");
+            }
             let m = match m.modulus {
                 Some(ref m) => m,
                 _ => zksc_panic!(ctx, "Infinite modulus not supported in $post"),
@@ -2309,10 +2351,13 @@ pub fn dbg_print(ctx: &ContextRef, d: DomainType, s: &Value) {
         let s = get_vstr(s);
         let w = sieve_backend().get_next_wire_number();
         let r = sieve_backend().get_rel_file_size();
-        if w > 0 || r > 0 {
+        if w > 0 {
             let w_str = format!("{:10}", w);
             let r_str = format!("{:9}", r);
             debug!("[wire:{w_str}, rel:{r_str}] {s}");
+        } else if r > 0 {
+            let r_str = format!("{:9}", r);
+            debug!("[rel:{r_str}] {s}");
         } else {
             debug!("{s}");
         }
@@ -2602,15 +2647,21 @@ fn wire_bool(ctx: &ContextRef, m: &NatType, d: DomainType, x: &Value) -> Value {
             Prover => {
                 let w = sieve_backend().get_witness(&m_orig);
                 // For bool[N] @prover (N > 2), check that the value is a bit.
+                let ring_type = m.ring_type;
                 let m = match m.modulus {
                     Some(ref m) => m,
                     _ => zksc_panic!(ctx, "Infinite modulus not supported in $post"),
                 };
                 if m > &Integer::from(2) {
-                    let x2 = sieve_mul(ctx, &m_orig, &w, &w);
-                    let minus_x = sieve_mulc(ctx, &m_orig, &w, &(m - 1));
-                    let x2_minus_x = sieve_add(ctx, &m_orig, &x2, &minus_x);
-                    sieve_assert_zero(ctx, &m_orig, &x2_minus_x);
+                    if ring_type == RingBitwise {
+                        let x_plus_1 = sieve_addc(ctx, &m_orig, &w, &ctx.integer_one);
+                        let x_times_x_plus_1 = sieve_mul(ctx, &m_orig, &x_plus_1, &w);
+                        sieve_assert_zero(ctx, &m_orig, &x_times_x_plus_1);
+                    } else {
+                        let x2 = sieve_mul(ctx, &m_orig, &w, &w);
+                        let x2_minus_x = sieve_backend().sub(&m_orig, &x2, &w);
+                        sieve_assert_zero(ctx, &m_orig, &x2_minus_x);
+                    }
                 }
                 w
             }
@@ -2643,15 +2694,22 @@ fn wire_bool(ctx: &ContextRef, m: &NatType, d: DomainType, x: &Value) -> Value {
             Prover => {
                 let w = sieve_get_witness(ctx, &m_orig);
                 // For bool[N] @prover (N > 2), check that the value is a bit.
+                let ring_type = m.ring_type;
                 let m = match m.modulus {
                     Some(ref m) => m,
                     _ => zksc_panic!(ctx, "Infinite modulus not supported in $post"),
                 };
                 if m > &Integer::from(2) {
-                    let x2 = sieve_mul(ctx, &m_orig, &w, &w);
-                    let minus_x = sieve_mulc(ctx, &m_orig, &w, &(m - 1));
-                    let x2_minus_x = sieve_add(ctx, &m_orig, &x2, &minus_x);
-                    sieve_assert_zero(ctx, &m_orig, &x2_minus_x);
+                    if ring_type == RingBitwise {
+                        let x_plus_1 = sieve_addc(ctx, &m_orig, &w, &ctx.integer_one);
+                        let x_times_x_plus_1 = sieve_mul(ctx, &m_orig, &x_plus_1, &w);
+                        sieve_assert_zero(ctx, &m_orig, &x_times_x_plus_1);
+                    } else {
+                        let x2 = sieve_mul(ctx, &m_orig, &w, &w);
+                        let minus_x = sieve_mulc(ctx, &m_orig, &w, &(m - 1));
+                        let x2_minus_x = sieve_add(ctx, &m_orig, &x2, &minus_x);
+                        sieve_assert_zero(ctx, &m_orig, &x2_minus_x);
+                    }
                 }
                 w
             }
@@ -2724,7 +2782,7 @@ fn cast_to_correct_moduli(ctx : &ContextRef, t: &Type, x: &Value) -> Value {
     match t {
         TQualify(u, _, _) => cast_to_correct_moduli(ctx,u, x),
         TBool(_) => x.clone(),
-        TUInt(m) => cast_to_uint(ctx,ctx.nat_inf(),x,m),
+        TUInt(m) => cast_to_uint(ctx,Pre,ctx.nat_inf(),x,m),
         TList(t) => rep::Array::new(get_varray(x).iter().map(|x| cast_to_correct_moduli(ctx,t, x)).collect()),
         TTuple(ts) => StructInner::new_tuple(get_varray(x).iter().zip(ts.iter()).map(|(x,t)| cast_to_correct_moduli(ctx,t, x)).collect()),
         t => zksc_panic!(ctx, "cast_to_correct_moduli: unsupported type of get_public/instance/witness return value: {:?}", t),
@@ -4228,7 +4286,7 @@ pub fn freeze(ctx: &ContextRef, t: &Type, s: StageType, d: DomainType, dl: Domai
     if contains_pre && contains_post {
         panic!("freeze: vectors cannot currently contain both pre and post scalars");
     }
-    if contains_post && use_iter_plugin(ctx) {
+    if contains_post && use_iter_plugin(ctx) && !ctx.inside_sieve_fn_call() {
         let v = unslice_helper(v);
         let aos = get_varray(&v);
         let soa = aos_to_soa(aos);
@@ -4274,7 +4332,7 @@ pub fn thaw(ctx: &ContextRef, t: &Type, s: StageType, d: DomainType, dl: DomainT
     if contains_pre && contains_post {
         panic!("thaw: vectors cannot currently contain both pre and post scalars");
     }
-    if contains_post && use_iter_plugin(ctx) {
+    if contains_post && use_iter_plugin(ctx) && !ctx.inside_sieve_fn_call() {
         thaw_helper(v)
     } else {
         v.clone()
@@ -4747,15 +4805,15 @@ pub fn array_to_post(ctx: &ContextRef, stack: &mut Stack, t: &Type, d: DomainTyp
     let v = unslice_helper(v);
     let soa = match v.view() {
         ValueView::ArrayBool(xs) => aos_to_soa(&xs.iter().map(|x| rep::Bool::new(*x)).collect()),
+        ValueView::ArrayU32(xs) => aos_to_soa(&xs.iter().map(|x| Value::new::<u32>(*x)).collect()),
+        ValueView::ArrayU64(xs) => aos_to_soa(&xs.iter().map(|x| Value::new::<u64>(*x)).collect()),
         ValueView::Array(xs) => aos_to_soa(xs),
         _ => panic!("array_to_post: not a supported array element type"),
     };
     let soa = soa_add_moduli_and_domains_and_need_check_bit(t, d, soa);
     let soa = soa.map_mut(&mut |(m, d, need_check_bit, xs)| {
         match d {
-            Public => {
-                panic!("array_to_post: @public elements not yet supported");
-            }
+            Public => {}
             Verifier => {
                 xs.iter().for_each(|x| {
                     sieve_backend().add_instance(m, x);
@@ -4770,7 +4828,12 @@ pub fn array_to_post(ctx: &ContextRef, stack: &mut Stack, t: &Type, d: DomainTyp
         let wr =
             if NEED_REL {
                 match d {
-                    Public => panic!(),
+                    Public => {
+                        let wocs = xs.iter().map(|x| {
+                            WireOrConst::C(get_pre_or_post_uint_or_bool(ctx, m, x))
+                        }).collect();
+                        sieve_backend().create_vector(m, wocs)
+                    }
                     Verifier => sieve_backend().get_instance_wr(m, xs.len()),
                     Prover => {
                         let wr = sieve_backend().get_witness_wr(m, xs.len());
@@ -4806,7 +4869,7 @@ pub fn array_to_prover(_ctx: &ContextRef, _m: &NatType, v: &Value) -> Value {
     v.clone()
 }
 
-fn unslice_helper(v: &Value) -> Value {
+pub fn unslice_helper(v: &Value) -> Value {
     match v.view() {
         ValueView::Slice(v, ir) => {
             match v.view() {

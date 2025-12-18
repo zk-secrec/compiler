@@ -389,8 +389,8 @@ compile CmdOptions{..} mTypedProgram uniq senv ccc = do
   testdata <- checkConfiguration typedProgram ccc
   if _verbose
     then do
-      liftIO . putStrLn . render $ "Supported fields:"
-      liftIO . putStrLn . render $ vcat (fmap pretty (_supportedFields testdata))
+      liftIO . putStrLn . render $ "Supported rings:"
+      liftIO . putStrLn . render $ vcat (fmap pretty (_supportedRings testdata))
       liftIO . putStrLn . render $ "Supported challenges:"
       liftIO . putStrLn . render $ vcat (fmap pretty (_supportedChallenges testdata))
       liftIO . putStrLn . render $ "Supported conversions:"

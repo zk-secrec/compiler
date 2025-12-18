@@ -24,7 +24,7 @@ primitiveModulusToRustType m
 isTypePrimitive :: Type TyVar -> Bool
 isTypePrimitive = \case
   TQualify (TUInt (TNat (Finite m))) (TStage TVPre) _ -> m `elem` primitiveUints
-  TQualify (TBool _) (TStage TVPre) _ -> True
+  TQualify (TBin _) (TStage TVPre) _ -> True
   TQualify TUnit (TStage TVPre) _ -> True
   _ -> False
 
@@ -32,7 +32,7 @@ isTypePrimitive = \case
 primitiveToRustType :: Type TyVar -> String
 primitiveToRustType = \case
   TQualify (TUInt (TNat (Finite m))) (TStage TVPre) _ | m `elem` primitiveUints -> primitiveModulusToRustType m
-  TQualify (TBool _) (TStage TVPre) _ -> "bool"
+  TQualify (TBin _) (TStage TVPre) _ -> "bool"
   TQualify TUnit (TStage TVPre) _ -> "unit"
   _ -> error "Not a primitive type"
 
@@ -40,7 +40,7 @@ primitiveToRustType = \case
 unknownPrimitive :: Type TyVar -> String
 unknownPrimitive = \case
   TQualify (TUInt (TNat (Finite m))) (TStage TVPre) _ | m `elem` primitiveUints -> "0" ++ primitiveModulusToRustType m
-  TQualify (TBool _) (TStage TVPre) _ -> "false"
+  TQualify (TBin _) (TStage TVPre) _ -> "false"
   TQualify TUnit (TStage TVPre) _ -> "()"
   _ -> error "Not a primitive type"
 

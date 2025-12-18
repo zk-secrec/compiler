@@ -84,6 +84,9 @@ dumpCCCType t@ (CCCExtField _ _ _)
 dumpCCCType t@ (CCCRing _)
   = withName "Ring" $
       withName "widthPreds" (dumpList (withLocation "widthPred" dumpCCCPred) (_cccWidthPreds t))
+dumpCCCType t@ (CCCBitwise _)
+  = withName "Bitwise" $
+      withName "bitwisePreds" (dumpList (withLocation "bitwisePred" dumpCCCPred) (_cccBitwisePreds t))
 dumpCCCType    (CCCPluginType name)
   = withLocationInline "PluginType" pretty name
 

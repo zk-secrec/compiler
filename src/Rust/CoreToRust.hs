@@ -98,18 +98,28 @@ operToFun f = stringIdToRust f
 idOperToFun :: Id -> String
 idOperToFun = operToFun . Rust.SemanticsHelpers.idToString
 
+data Ring = PlainRing ExtendedNatural | BitwiseRing ExtendedNatural
+  deriving (Show, Eq, Ord)
+
+mainRingToRing :: MainRing Integer -> Ring
+mainRingToRing (MR Plain n) = PlainRing (Finite (fromInteger n))
+mainRingToRing (MR Bitwise n) = BitwiseRing (Finite (fromInteger n))
+
 modToNat :: (?ctx :: Context) => ExtendedNatural -> String
-modToNat m =
-  case Map.lookup m (_natLiteralIndices ?ctx) of
-    Nothing -> error "ICE: unexpected Nat literal!"
-    Just (index, _) -> "ctx.nat_type_literals[" ++ show index ++ " /* value: " ++ show m ++ " */]"
+modToNat m = ringToNat (PlainRing m)
+
+ringToNat :: (?ctx :: Context) => Ring -> String
+ringToNat r =
+  case Map.lookup r (_ringLiteralIndices ?ctx) of
+    Nothing -> error $ "ICE: unexpected Ring literal: " ++ show r
+    Just (index, _) -> "ctx.nat_type_literals[" ++ show index ++ " /* value: " ++ show r ++ " */]"
 
 data Context
   = Ctx
   { _indent :: IORef String
   , _lineFinished :: IORef Bool
   , _literalIndices :: Map Integer (Int, Int)
-  , _natLiteralIndices :: Map ExtendedNatural (Int, Int)
+  , _ringLiteralIndices :: Map Ring (Int, Int)
   , _strLiteralIndices :: Map String (Int, Int)
   , _numPostModuli :: Int
   , _recursiveVars :: IORef (Set Var)
@@ -159,6 +169,24 @@ typeToRefNatTypeRust = \case
   TVar x KindNat _ -> varToString x
   t -> error $ "typeToRefNatTypeRust: not a Nat type " ++ render (pretty t)
 
+typeToRefRingTypeRust :: (?ctx :: Context) => Type Var -> String
+typeToRefRingTypeRust = \case
+  TPlain (TNat m) -> '&' : ringToNat (PlainRing m)
+  TPlain (TVar x KindNat _) -> varToString x -- TODO: represent Nat and Ring differently in Rust
+  TBitwise (TNat m) -> '&' : ringToNat (BitwiseRing m)
+  TBitwise (TVar x KindNat _) -> error "typeToRefRingTypeRust: support for bitwise[N] in functions polymorphic in N : Nat is not yet implemented (N = " ++ varToString x ++ ")"
+  TVar x KindRing _ -> varToString x
+  t -> error $ "typeToRefRingTypeRust: not a Ring type " ++ render (pretty t)
+
+typeToRingTypeRust :: (?ctx :: Context) => Type Var -> String
+typeToRingTypeRust = \case
+  TPlain (TNat m) -> ringToNat (PlainRing m) ++ ".clone()"
+  TPlain (TVar x KindNat _) -> varToString x ++ ".clone()" -- TODO: represent Nat and Ring differently in Rust
+  TBitwise (TNat m) -> ringToNat (BitwiseRing m) ++ ".clone()"
+  TBitwise (TVar x KindNat _) -> error "typeToRingTypeRust: support for bitwise[N] in functions polymorphic in N : Nat is not yet implemented (N = " ++ varToString x ++ ")"
+  TVar x KindRing _ -> varToString x ++ ".clone()"
+  t -> error $ "typeToRingTypeRust: not a Ring type " ++ render (pretty t)
+
 typeToNatTypeRust :: (?ctx :: Context) => Type Var -> String
 typeToNatTypeRust = \case
   TNat m -> modToNat m ++ ".clone()"
@@ -174,52 +202,61 @@ uintNToRefNatTypeRust = \case
   TCastUnqual u _ -> uintNToRefNatTypeRust u
   t -> error $ "uintNToNatTypeRust: not an uint[N] type: " ++ showType t
 
-sizedTypeToRefNatTypesRust :: (?ctx :: Context) => Type Var -> String
-sizedTypeToRefNatTypesRust = \case
-  TUInt m -> "SoA::Scalar(" ++ typeToRefNatTypeRust m ++ ")"
-  TBool m -> "SoA::Scalar(" ++ typeToRefNatTypeRust m ++ ")"
+ringToRefRingTypeRust :: (?ctx :: Context) => Type Var -> String
+ringToRefRingTypeRust = \case
+  TInt r -> typeToRefRingTypeRust r
+  TBin r -> typeToRefRingTypeRust r
+  TQualify u _ _ -> ringToRefRingTypeRust u
+  TCast q _ -> ringToRefRingTypeRust q
+  TCastUnqual u _ -> ringToRefRingTypeRust u
+  t -> error $ "ringToRefRingTypeRust: not a ring type: " ++ showType t
+
+sizedTypeToRefRingTypesRust :: (?ctx :: Context) => Type Var -> String
+sizedTypeToRefRingTypesRust = \case
+  TInt r -> "SoA::Scalar(" ++ typeToRefRingTypeRust r ++ ")"
+  TBin r -> "SoA::Scalar(" ++ typeToRefRingTypeRust r ++ ")"
   TUnit -> handle_tuple []
-  TQualify u _ _ -> sizedTypeToRefNatTypesRust u
-  TCast q _ -> sizedTypeToRefNatTypesRust q
-  TCastUnqual u _ -> sizedTypeToRefNatTypesRust u
+  TQualify u _ _ -> sizedTypeToRefRingTypesRust u
+  TCast q _ -> sizedTypeToRefRingTypesRust q
+  TCastUnqual u _ -> sizedTypeToRefRingTypesRust u
   TTuple ts -> handle_tuple ts
-  TList t -> "SoA::ListType(Box::new(" ++ sizedTypeToRefNatTypesRust t ++ "))" -- used for non-vectorized calls
+  TList t -> "SoA::ListType(Box::new(" ++ sizedTypeToRefRingTypesRust t ++ "))" -- used for non-vectorized calls
   t -> case tryGetFieldTypes (_structsEnv ?ctx) t of
     Just ts -> handle_tuple ts
-    -- TODO: sizedTypeToRefNatTypesRust can currently be called also for non-Sized types
+    -- TODO: sizedTypeToRefRingTypesRust can currently be called also for non-Sized types
     -- (for partially applied functions for which it is not known if it is a sieve fn)
     -- so we cannot use error here, instead we return an arbitrary value as it will not be used
     --Nothing -> error $ "sizedTypeToNatTypeRust: not a SizedType: " ++ showType t
     Nothing -> "SoA::Empty"
   where
-    handle_tuple ts = "SoA::Tuple(vec![" ++ intercalate ", " (map sizedTypeToRefNatTypesRust ts) ++ "])"
+    handle_tuple ts = "SoA::Tuple(vec![" ++ intercalate ", " (map sizedTypeToRefRingTypesRust ts) ++ "])"
 
 boolToRust :: Bool -> String
 boolToRust False = "false"
 boolToRust True = "true"
 
-sizedTypeToRefNatTypesOrPrePublicRust :: (?ctx :: Context) => Type Var -> String
-sizedTypeToRefNatTypesOrPrePublicRust = sizedTypeToRefNatTypesOrPrePublicRust0 True where
-  sizedTypeToRefNatTypesOrPrePublicRust0 :: (?ctx :: Context) => Bool -> Type Var -> String
-  sizedTypeToRefNatTypesOrPrePublicRust0 isPrePublic = \case
-    TUInt m -> "SoA::Scalar((" ++ typeToRefNatTypeRust m ++ ", " ++ boolToRust isPrePublic ++ "))"
-    TBool m -> "SoA::Scalar((" ++ typeToRefNatTypeRust m ++ ", " ++ boolToRust isPrePublic ++ "))"
+sizedTypeToRefRingTypesOrPrePublicRust :: (?ctx :: Context) => Type Var -> String
+sizedTypeToRefRingTypesOrPrePublicRust = sizedTypeToRefRingTypesOrPrePublicRust0 True where
+  sizedTypeToRefRingTypesOrPrePublicRust0 :: (?ctx :: Context) => Bool -> Type Var -> String
+  sizedTypeToRefRingTypesOrPrePublicRust0 isPrePublic = \case
+    TInt r -> "SoA::Scalar((" ++ typeToRefRingTypeRust r ++ ", " ++ boolToRust isPrePublic ++ "))"
+    TBin r -> "SoA::Scalar((" ++ typeToRefRingTypeRust r ++ ", " ++ boolToRust isPrePublic ++ "))"
     TUnit -> handle_tuple []
-    TQualify u (TStage TVPre) (TDomain TVPublic) -> sizedTypeToRefNatTypesOrPrePublicRust0 isPrePublic u
-    TQualify u _ _ -> sizedTypeToRefNatTypesOrPrePublicRust0 False u
-    TCast q _ -> sizedTypeToRefNatTypesOrPrePublicRust0 False q
-    TCastUnqual u _ -> sizedTypeToRefNatTypesOrPrePublicRust0 False u
+    TQualify u (TStage TVPre) (TDomain TVPublic) -> sizedTypeToRefRingTypesOrPrePublicRust0 isPrePublic u
+    TQualify u _ _ -> sizedTypeToRefRingTypesOrPrePublicRust0 False u
+    TCast q _ -> sizedTypeToRefRingTypesOrPrePublicRust0 False q
+    TCastUnqual u _ -> sizedTypeToRefRingTypesOrPrePublicRust0 False u
     TTuple ts -> handle_tuple ts
-    TList t -> "SoA::ListType(Box::new(" ++ sizedTypeToRefNatTypesOrPrePublicRust0 isPrePublic t ++ "))" -- used for non-vectorized calls
+    TList t -> "SoA::ListType(Box::new(" ++ sizedTypeToRefRingTypesOrPrePublicRust0 isPrePublic t ++ "))" -- used for non-vectorized calls
     t -> case tryGetFieldTypes (_structsEnv ?ctx) t of
       Just ts -> handle_tuple ts
-      -- TODO: sizedTypeToRefNatTypesRust can currently be called also for non-Sized types
+      -- TODO: sizedTypeToRefRingTypesRust can currently be called also for non-Sized types
       -- (for partially applied functions for which it is not known if it is a sieve fn)
       -- so we cannot use error here, instead we return an arbitrary value as it will not be used
       --Nothing -> error $ "sizedTypeToNatTypeRust: not a SizedType: " ++ showType t
       Nothing -> "SoA::Empty"
     where
-      handle_tuple ts = "SoA::Tuple(vec![" ++ intercalate ", " (map (sizedTypeToRefNatTypesOrPrePublicRust0 isPrePublic) ts) ++ "])"
+      handle_tuple ts = "SoA::Tuple(vec![" ++ intercalate ", " (map (sizedTypeToRefRingTypesOrPrePublicRust0 isPrePublic) ts) ++ "])"
 
 addLifetimes :: String -> String
 addLifetimes = f where
@@ -245,8 +282,8 @@ typeToValueTypeRust t = "&" ++ typeToValueTypeRepRust t
 typeToValueTypeRepRust :: (?ctx :: Context) => Type Var -> String
 typeToValueTypeRepRust = \case
   TUnit -> "TUnit"
-  TBool m -> "TBool(" ++ typeToRefNatTypeRust m ++ ")"
-  TUInt m -> "TUInt(" ++ typeToRefNatTypeRust m ++ ")"
+  TBin r -> "TBool(" ++ typeToRefRingTypeRust r ++ ")"
+  TInt r -> "TUInt(" ++ typeToRefRingTypeRust r ++ ")"
   TList t -> "TList(" ++ typeToValueTypeRust t ++ ")"
   TArr t -> "TArr(" ++ typeToValueTypeRust t ++ ")"
   TTuple ts -> handle_tuple ts
@@ -267,7 +304,7 @@ typeToQualifiedTypeRust = \case
   TVar x KindStar _ -> varToString x
   t -> error "typeToQualifiedTypeRust: not a qualified type: " ++ render (pretty t)
 
--- Translate stage, domain, qualified, and nat types to Rust.
+-- Translate stage, domain, qualified, ring, and nat types to Rust.
 -- needRef specifies if a reference is needed instead of ownership.
 -- needRef is ignored for stage, domain, and qualified types, as these are always passed by value.
 -- Currently not implemented for unqualified types;
@@ -279,6 +316,7 @@ typeToRust needRef = \case
     KindDomain -> typeToDomainTypeRust t
     KindStar -> typeToQualifiedTypeRust t
     KindNat -> if needRef then typeToRefNatTypeRust t else typeToNatTypeRust t
+    KindRing -> if needRef then typeToRefRingTypeRust t else typeToRingTypeRust t
     KindUnqualified -> error "typeToRust should not be called for unqualified types"
     k -> error $ "typeToRust unimplemented for " ++ render (pretty t) ++ " of kind " ++ render (pretty k)
 
@@ -299,6 +337,7 @@ getHofTypeArgDecls ts =
       in
         case typeKind t of
           KindNat -> Just ("TENat(" ++ t_rust ++ ")")
+          KindRing -> Just ("TENat(" ++ t_rust ++ ")")
           KindStage -> Just ("TEStage(" ++ t_rust ++ ")")
           KindDomain -> Just ("TEDomain(" ++ t_rust ++ ")")
           KindStar -> Just ("TEQualified(" ++ t_rust ++ ")")
@@ -337,6 +376,7 @@ withIncreasedIndent ctx act = do
 -- are type variables of this kind passed as function arguments is the generated Rust code
 isKindPassed :: Kind -> Bool
 isKindPassed KindNat = True
+isKindPassed KindRing = True
 isKindPassed KindDomain = True
 isKindPassed KindStage = True
 isKindPassed KindStar = True
@@ -540,7 +580,7 @@ translateLit ctx@Ctx{..} t = \case
     Nothing -> "&rep::Str::new(String::from(" ++ stringLiteralToRust s ++ "))"
     Just (index, _) -> "&ctx.string_literals[" ++ show index ++ " /* value: " ++ show s ++ " */]"
   where
-    natType = let ?ctx = ctx in uintNToRefNatTypeRust t
+    natType = let ?ctx = ctx in ringToRefRingTypeRust t
 
 translateDomainCast :: (?ctx :: Context) => Var -> Type TyVar -> String
 translateDomainCast x t | isTypePrimitive (idToType x) = varToString x
@@ -571,6 +611,7 @@ translateExpr ctx@Ctx{..} recRetVar e = case e of
     let ?ctx = ctx in
     let
       inType = idToType x
+      stage = typeToStageTypeRust inType
       t' = idToType recRetVar
     in writeUnfinishedLine ctx $
       case t of
@@ -580,24 +621,24 @@ translateExpr ctx@Ctx{..} recRetVar e = case e of
         TStage TVPre
           | isTypePrimitive inType -> varToString x
           | otherwise -> valueToPrimitiveIfNecessary t' $ "cast_to_pre(" ++ varToString x ++ ")"
-        TBool t ->
+        TBin t ->
           case (isTypePrimitive inType, isTypePrimitive t') of
             (True, True) -> varToString x ++ " as " ++ primitiveToRustType t'
             (True, False) ->
-                "&cast_to_bool(ctx," ++ uintNToRefNatTypeRust inType ++ ", &" ++ primitiveVarToValue x ++ ", " ++ typeToRefNatTypeRust t ++ ")"
+                "&cast_to_bool(ctx," ++ ringToRefRingTypeRust inType ++ ", &" ++ primitiveVarToValue x ++ ", " ++ typeToRefRingTypeRust t ++ ")"
             (False, True) ->
-                valueToPrimitive t' ("&cast_to_bool(ctx," ++ uintNToRefNatTypeRust inType ++ ", " ++ varToString x ++ ", " ++ typeToRefNatTypeRust t ++ ")")
+                valueToPrimitive t' ("&cast_to_bool(ctx," ++ ringToRefRingTypeRust inType ++ ", " ++ varToString x ++ ", " ++ typeToRefRingTypeRust t ++ ")")
             (False, False) ->
-                "&cast_to_bool(ctx," ++ uintNToRefNatTypeRust inType ++ ", " ++ varToString x ++ ", " ++ typeToRefNatTypeRust t ++ ")"
-        TUInt t ->
+                "&cast_to_bool(ctx," ++ ringToRefRingTypeRust inType ++ ", " ++ varToString x ++ ", " ++ typeToRefRingTypeRust t ++ ")"
+        TInt t ->
           case (isTypePrimitive inType, isTypePrimitive t') of
             (True, True) -> varToString x ++ " as " ++ primitiveToRustType t'
             (True, False) ->
-                "&cast_to_uint(ctx," ++ uintNToRefNatTypeRust inType ++ ", &" ++ primitiveVarToValue x ++ ", " ++ typeToRefNatTypeRust t ++ ")"
+                "&cast_to_uint(ctx," ++ stage ++ ", " ++ ringToRefRingTypeRust inType ++ ", &" ++ primitiveVarToValue x ++ ", " ++ typeToRefRingTypeRust t ++ ")"
             (False, True) ->
-                valueToPrimitive t' ("&cast_to_uint(ctx," ++ uintNToRefNatTypeRust inType ++ ", " ++ varToString x ++ ", " ++ typeToRefNatTypeRust t ++ ")")
+                valueToPrimitive t' ("&cast_to_uint(ctx," ++ stage ++ ", " ++ ringToRefRingTypeRust inType ++ ", " ++ varToString x ++ ", " ++ typeToRefRingTypeRust t ++ ")")
             (False, False) ->
-                "&cast_to_uint(ctx," ++ uintNToRefNatTypeRust inType ++ ", " ++ varToString x ++ ", " ++ typeToRefNatTypeRust t ++ ")"
+                "&cast_to_uint(ctx," ++ stage ++ ", " ++ ringToRefRingTypeRust inType ++ ", " ++ varToString x ++ ", " ++ typeToRefRingTypeRust t ++ ")"
         _ -> error $ "translateExpr: Unsupported cast: " ++ showCoreExpr e
   CeTypeToExpr t ->
     writeUnfinishedLine ctx $ "&type_to_expr(" ++ typeToRefNatTypeRust t ++ ")"
@@ -706,8 +747,10 @@ translateExpr ctx@Ctx{..} recRetVar e = case e of
           PredPost s _ ->
             typeToStageTypeRust s ++ " == Post"
           PredField n _ -> "pred_field(ctx, "  ++ typeToRefNatTypeRust n ++ ")"
-          PredChallenge n _ -> "pred_challenge(ctx, "  ++ typeToRefNatTypeRust n ++ ")"
+          PredPostRing r _ -> "pred_post_ring(ctx, " ++ typeToRefRingTypeRust r ++ ")"
+          PredChallenge r _ -> "pred_challenge(ctx, "  ++ typeToRefRingTypeRust r ++ ")"
           PredConvertible n1 n2 _ -> "pred_convertible(ctx, "  ++ typeToRefNatTypeRust n1 ++ ", " ++ typeToRefNatTypeRust n2 ++ ")"
+          PredPostConvertible r1 r2 _ -> "pred_post_convertible(ctx, "  ++ typeToRefRingTypeRust r1 ++ ", " ++ typeToRefRingTypeRust r2 ++ ")"
           PredVectorization _ -> "ctx.is_iter_available"
           PredExtendedArithmetic _ -> "plugin_supported(ctx, \"extended_arithmetic\")"
           PredPermutationCheck _ -> "plugin_supported(ctx, \"permutation_check\")"
@@ -775,8 +818,8 @@ translateExpr ctx@Ctx{..} recRetVar e = case e of
     let numArgs = length xs
     let (argTypes, resType) = splitFuncTypeN (idToType f) numArgs
     let ?ctx = ctx in do
-      let outputModuli = sizedTypeToRefNatTypesRust resType
-      let inputModuli = map sizedTypeToRefNatTypesRust argTypes
+      let outputModuli = sizedTypeToRefRingTypesRust resType
+      let inputModuli = map sizedTypeToRefRingTypesRust argTypes
       let typeArgDecls = getTypeArgDecls ts
       let hofTypeArgDecls = getHofTypeArgDecls ts
       if Map.member f _globalFunMap || isBuiltinVar f then
@@ -821,10 +864,10 @@ translateExpr ctx@Ctx{..} recRetVar e = case e of
     -- For some reason, this does not work:
     --let numArgs = length xs
     --let (_argTypes, resType) = splitFuncTypeN (idToType f) numArgs
-    --let inputModuli = map sizedTypeToRefNatTypesRust argTypes
-    let inputModuli = flip map xs $ \ x -> sizedTypeToRefNatTypesOrPrePublicRust (idToType x)
+    --let inputModuli = map sizedTypeToRefRingTypesRust argTypes
+    let inputModuli = flip map xs $ \ x -> sizedTypeToRefRingTypesOrPrePublicRust (idToType x)
     let resType = idToType recRetVar
-    let outputModuli = sizedTypeToRefNatTypesRust resType
+    let outputModuli = sizedTypeToRefRingTypesRust resType
     let extraTypeArgDecls | fname `elem` ["get_public", "get_instance", "get_witness", "array_to_post", "freeze", "thaw", "to_string"] && not (null ts) = [typeToValueTypeRust (head ts)]
                           | fname == "assert_eq" && length ts >= 3 = [typeToValueTypeRust (ts !! 1), typeToValueTypeRust (ts !! 2)]
                           | otherwise = []
@@ -896,9 +939,9 @@ translateExpr ctx@Ctx{..} recRetVar e = case e of
     let fs = defaultCase : map snd cases
     let ints = map fst cases
     let xModulus = uintNToRefNatTypeRust (idToType x)
-    let inputModuli = flip map xs $ \ x -> sizedTypeToRefNatTypesOrPrePublicRust (idToType x)
+    let inputModuli = flip map xs $ \ x -> sizedTypeToRefRingTypesOrPrePublicRust (idToType x)
     let resType = idToType recRetVar
-    let outputModuli = sizedTypeToRefNatTypesRust resType
+    let outputModuli = sizedTypeToRefRingTypesRust resType
     let argDecls = map varToString xs
     let hof_argDecls = map (++ ".clone()") argDecls
     let fnames = map varToString fs
@@ -917,7 +960,7 @@ translateExpr ctx@Ctx{..} recRetVar e = case e of
   CeDbgAssert x l mcl -> callWithLocUnit ctx (Left "dbg_assert") l $ do
     let t = idToType x
     let d = typeToDomainTypeRust t
-    let natTy = uintNToRefNatTypeRust t
+    let natTy = ringToRefRingTypeRust t
     if isTypePrimitive t
       then writeUnfinishedLine ctx $ "dbg_assert_bool(ctx, " ++ d ++ ", " ++ idToString x ++ ", " ++ show (render (pretty l)) ++ ", "
       else writeUnfinishedLine ctx $ "dbg_assert(ctx, " ++ d ++ ", " ++ natTy ++ ", " ++ idToString x ++ ", " ++ show (render (pretty l)) ++ ", "
@@ -926,7 +969,7 @@ translateExpr ctx@Ctx{..} recRetVar e = case e of
   CeDbgAssertEq x y l mcl -> callWithLocUnit ctx (Left "dbg_assert_eq") l $ do
     let t = idToType x
     let d = typeToDomainTypeRust t
-    let natTy = uintNToRefNatTypeRust t
+    let natTy = ringToRefRingTypeRust t
     if isTypePrimitive t
       then writeUnfinishedLine ctx $ "dbg_assert_eq_" ++ primitiveToRustType t ++ "(ctx, " ++ d ++ ", " ++ idToString x ++ ", " ++ idToString y ++ ", " ++ show (render (pretty l)) ++ ", "
       else writeUnfinishedLine ctx $ "dbg_assert_eq(ctx, " ++ d ++ ", " ++ natTy ++ ", " ++ idToString x ++ ", " ++ idToString y ++ ", " ++ show (render (pretty l)) ++ ", "
@@ -1015,12 +1058,11 @@ translateWireExpr _ _ (CoreLet _ retVars) = error $ "translateWireExpr: multiple
 header :: String
 header = "\
     \/*\n\
-    \ * Copyright 2024 Cybernetica AS\n\
-    \ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:\n\
-    \ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.\n\
-    \ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.\n\
-    \ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.\n\
-    \ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n\
+    \ * Copyright (C) Cybernetica AS\n\
+    \ *\n\
+    \ * All rights are reserved. Reproduction in whole or part is prohibited\n\
+    \ * without the written consent of the copyright owner. The usage of this\n\
+    \ * code is subject to the appropriate license agreement.\n\
     \ */\n\n\
     \/*\n\
     \ * WARNING! WARNING! WARNING!\n\
@@ -1034,6 +1076,7 @@ header = "\
     \use crate::zksc_types::*;\n\
     \use crate::builtins::*;\n\
     \use crate::integer::*;\n\
+    \use crate::zksc_integer::BitwiseBigInt;\n\
     \use crate::value::*;\n\
     \use crate::value_conversions::*;\n\
     \use num_integer::Integer;\n\
@@ -1078,12 +1121,15 @@ natToBeHex :: Natural -> Int -> String
 natToBeHex n limbs = printf fmt n
     where fmt = "\"%0" ++ show (2 * bytesPerLimb * limbs) ++ "x\""
 
-fieldName :: Natural -> String
-fieldName n | n `elem` primitiveUints = primitiveModulusToRustType n
-            | otherwise = "PrimeField" ++ show n
+ringName :: Ring -> String
+ringName (PlainRing (Finite n)) | n `elem` primitiveUints = primitiveModulusToRustType n
+                                | otherwise = "AdditiveRing" ++ show n
+ringName (PlainRing Infinite) = "BigInt"
+ringName (BitwiseRing (Finite n)) = "BitwiseRing" ++ show n
+ringName (BitwiseRing Infinite) = "BitwiseBigInt"
 
-definePrimeFieldType :: Context -> Natural -> IO ()
-definePrimeFieldType ctx n
+definePlainRingType :: Context -> Natural -> IO ()
+definePlainRingType ctx n
   | n == 0 = return () -- inf, already sorted
   | n `elem` primitiveUints = return () -- u64, etc., already sorted
   | n <= maxLimb = do
@@ -1097,15 +1143,36 @@ definePrimeFieldType ctx n
     defineFunc ctx $ do
         writeLine ctx $ "fixed_modulus_nattype!(" ++ name ++ ")"
   where
-    name = fieldName n
+    name = ringName (PlainRing (Finite n))
     limbCount = getLimbCount n
     defineFunc ctx act = do
         writeLine ctx $ "fn nattype_" ++ show n ++ "() -> NatType {"
         withIncreasedIndent ctx act
         writeLine ctx "}"
 
-registerPrimeFieldStructs :: Context -> [Natural] -> IO ()
-registerPrimeFieldStructs ctx nats = do
+defineBitwiseRingType :: Context -> Natural -> IO ()
+defineBitwiseRingType ctx n = do
+  let args = name ++ ", " ++ natToBeHex n limbCount
+  writeLine ctx $ "fixed_modulus_struct!{" ++ args ++ "}"
+  defineFunc ctx $ do
+      writeLine ctx $ "fixed_modulus_bitwise_nattype!(" ++ name ++ ")"
+  where
+    name = ringName (BitwiseRing (Finite n))
+    limbCount = getLimbCount n
+    defineFunc ctx act = do
+        writeLine ctx $ "fn bitwise_nattype_" ++ show n ++ "() -> NatType {"
+        withIncreasedIndent ctx act
+        writeLine ctx "}"
+
+defineRingType :: Context -> Ring -> IO ()
+defineRingType ctx = \case
+  PlainRing (Finite n) -> definePlainRingType ctx n
+  PlainRing Infinite -> return ()
+  BitwiseRing (Finite n) -> defineBitwiseRingType ctx n
+  BitwiseRing Infinite -> return ()
+
+registerRingStructs :: Context -> [(Ring, Int)] -> IO ()
+registerRingStructs ctx rings = do
   writeLine ctx "#[macro_export]"
   writeLine ctx "macro_rules! for_each_zksc_type {"
   withIncreasedIndent ctx $ do
@@ -1113,9 +1180,8 @@ registerPrimeFieldStructs ctx nats = do
     withIncreasedIndent ctx $ do
         writeLine ctx "$continuation! {"
         withIncreasedIndent ctx $ do
-            writeLine ctx "(BigInt,0),"
-            forM_ (zip nats [1 ..]) $ \(n, i) -> do
-                writeLine ctx $ "(" ++ fieldName n ++ "," ++ show i ++ "),"
+            forM_ rings $ \(r, i) -> do
+                writeLine ctx $ "(" ++ ringName r ++ "," ++ show i ++ "),"
         writeLine ctx "}"
     writeLine ctx "};"
   writeLine ctx "}"
@@ -1147,9 +1213,9 @@ writeHeader ctx testData iterUnconditionallyNeeded areExternsUsed mainTypeArgs =
   writeLine ctx header
   when areExternsUsed $ writeLine ctx "use crate::externs::*;"
   writeLine ctx "use crate::externs_stdlib::*;"
-  let nats = [n | Finite n <- map fst $ sortOn (fst . snd) $ Map.toList (_natLiteralIndices ctx)]
-  mapM_ (definePrimeFieldType ctx) nats
-  registerPrimeFieldStructs ctx nats
+  let rings = [(r, i) | (r, (i, _)) <- sortOn (fst . snd) $ Map.toList (_ringLiteralIndices ctx)]
+  mapM_ (defineRingType ctx . fst) rings
+  registerRingStructs ctx rings
   writeLine ctx $ "pub fn run(" ++ entryPointParameters ++ ") -> Result<()> {"
   withIncreasedIndent ctx $ do
     writeLine ctx "// Build cache for integer literals"
@@ -1167,32 +1233,39 @@ writeHeader ctx testData iterUnconditionallyNeeded areExternsUsed mainTypeArgs =
     writeLine ctx "// Build list of all possible Nat types"
     writeLine ctx "let nat_type_literals = vec!["
     withIncreasedIndent ctx $ do
-      forM_ (zip [0 ..] (sortOn snd (Map.toList (_natLiteralIndices ctx)))) $ \(tag, (literal, (_, count))) -> do
+      forM_ (zip [0 ..] (sortOn snd (Map.toList (_ringLiteralIndices ctx)))) $ \(tag, (literal, (_, count))) -> do
          writeLine ctx $ case literal of
-            Infinite -> "infinite_nattype(), // count: " ++ show count
-            Finite n
+            PlainRing Infinite -> "infinite_nattype(), // count: " ++ show count
+            PlainRing (Finite n)
               | n `elem` primitiveUints -> "nattype_" ++ show n ++ "(" ++ show tag ++ "), // count: " ++ show count
               | otherwise -> "nattype_" ++ show n ++ "(), // count: " ++ show count
+            BitwiseRing Infinite -> "infinite_bitwise_nattype(" ++ show tag ++ "), // count: " ++ show count
+            BitwiseRing (Finite n) -> "bitwise_nattype_" ++ show n ++ "(), // count: " ++ show count
     writeLine ctx "];"
+    let
+      ringTag r =
+        case Map.lookup r (_ringLiteralIndices ctx) of
+          Just idx -> show (fst idx)
+          Nothing -> "/* " ++ show r ++ " */"
     writeLine ctx "// Build list of supported fields"
     writeLine ctx "let supported_fields = vec!["
     withIncreasedIndent ctx $ do
-      forM_ (_supportedFields testData) $ \ n ->
-        writeLine ctx $ "BigInt::parse_bytes(b\"" ++ show n ++ "\", 10).unwrap(),"
+      forM_ (_supportedRings testData) $ \ mr ->
+        writeLine ctx $ "BigInt::parse_bytes(b\"" ++ ringTag (mainRingToRing mr) ++ "\", 10).unwrap(),"
     writeLine ctx "];"
     writeLine ctx "// Build list of supported challenges"
     writeLine ctx "let supported_challenges = vec!["
     withIncreasedIndent ctx $ do
-      forM_ (_supportedChallenges testData) $ \ n ->
-        writeLine ctx $ "BigInt::parse_bytes(b\"" ++ show n ++ "\", 10).unwrap(),"
+      forM_ (_supportedChallenges testData) $ \ mr ->
+        writeLine ctx $ "BigInt::parse_bytes(b\"" ++ ringTag (mainRingToRing mr) ++ "\", 10).unwrap(),"
     writeLine ctx "];"
     writeLine ctx "// Build list of supported conversions"
     writeLine ctx "let supported_conversions = vec!["
     withIncreasedIndent ctx $ do
-      forM_ (_supportedConverts testData) $ \ (n1, n2) ->
+      forM_ (_supportedConverts testData) $ \ (mr1, mr2) ->
         writeLine ctx $
-          "(BigInt::parse_bytes(b\"" ++ show n1 ++ "\", 10).unwrap()," ++
-          "BigInt::parse_bytes(b\"" ++ show n2 ++ "\", 10).unwrap()),"
+          "(BigInt::parse_bytes(b\"" ++ ringTag (mainRingToRing mr1) ++ "\", 10).unwrap()," ++
+          "BigInt::parse_bytes(b\"" ++ ringTag (mainRingToRing mr2) ++ "\", 10).unwrap()),"
     writeLine ctx "];"
     let (plugins, pluginsNonversioned) = unzip $ concatMap (choosePlugin iterUnconditionallyNeeded) $ _supportedPlugins testData
     let is_iter_available = any isPluginIter plugins
@@ -1208,21 +1281,22 @@ writeHeader ctx testData iterUnconditionallyNeeded areExternsUsed mainTypeArgs =
         writeLine ctx $ show s ++ ","
     writeLine ctx "];"
     let
-      natLit n =
-        case Map.lookup (Finite (fromInteger n)) (_natLiteralIndices ctx) of
+      natLit r =
+        case Map.lookup r (_ringLiteralIndices ctx) of
           Just idx -> "&nat_type_literals[" ++ show (fst idx) ++ "]"
-          Nothing -> "/* " ++ show n ++ " */"
+          Nothing -> "/* " ++ show r ++ " */"
+      natLitMR mr = natLit (mainRingToRing mr)
     writeLine ctx "let supported_conversions_nattype = vec!["
     withIncreasedIndent ctx $ do
-      forM_ (_supportedConverts testData) $ \ (n1, n2) ->
-        writeLine ctx $ "(" ++ natLit n1 ++ ", " ++ natLit n2 ++ "),"
+      forM_ (_supportedConverts testData) $ \ (r1, r2) ->
+        writeLine ctx $ "(" ++ natLitMR r1 ++ ", " ++ natLitMR r2 ++ "),"
     writeLine ctx "];"
     writeLine ctx $ "sieve_backend().write_headers(&nat_type_literals[0 .. " ++ show (1 + _numPostModuli ctx) ++ "].to_vec(), supported_conversions_nattype, supported_plugins);"
     writeLine ctx "let ctx = Context::new(input_public, input_instance, input_witness, circuit_content_loader, integer_literals, string_literals, nat_type_literals.clone(), supported_fields, supported_challenges, supported_conversions, is_iter_available, supported_plugins_nonversioned)?;"
     writeLine ctx "let ctx = &Rc::new(ctx);"
     writeLine ctx "let stack_memory = StackMemory::new(10 * 1024 * 1024);" -- 10 megabytes
     writeLine ctx "let mut stack = stack_memory.try_lock().unwrap();"
-    writeLine ctx $ "main0(ctx, &mut stack" ++ concatMap ((", " ++) . natLit . toInteger) mainTypeArgs ++ ");"
+    writeLine ctx $ "main0(ctx, &mut stack" ++ concatMap ((", " ++) . natLit . PlainRing . Finite) mainTypeArgs ++ ");"
     writeLine ctx "ctx.finalize()?;"
     writeLine ctx "Ok(())"
   writeLine ctx "}"
@@ -1230,6 +1304,9 @@ writeHeader ctx testData iterUnconditionallyNeeded areExternsUsed mainTypeArgs =
 withMaybeFile :: Maybe FilePath -> (Handle -> IO a) -> IO a
 withMaybeFile Nothing cont = cont stdout
 withMaybeFile (Just filePath) cont = withFile filePath WriteMode cont
+
+maxBitsInBitwiseRing :: Natural
+maxBitsInBitwiseRing = 65535
 
 coreToRust :: StructsEnv -> Maybe FilePath -> TestData -> CoreProgram -> IO ()
 coreToRust senv mOutputPath testData prog@CoreProgram{..} =
@@ -1290,13 +1367,17 @@ coreToRust senv mOutputPath testData prog@CoreProgram{..} =
               tvars)
     mainTypeArgs = map (fromInteger . flip findUM (mapUM unLocated (_mainTypeParamsEval testData))) mainTypeVars
     natsUnordered = buildFreqList [Finite n | n <- toListOf (definedVarsInCoreProgram.typesInVar.natLiteralsInType) prog ++ mainTypeArgs, n `notElem` primitiveUints]
-    ns = sortOn fst natsUnordered
-    (ns_post, ns_only_pre) = flip partition ns $ \ (en, _) ->
-      case en of
-        Infinite -> False
-        Finite n -> (n `notElem` primitiveUints) && (toInteger n `elem` _supportedFields testData)
-    nats = (Infinite, 0) : ns_post ++ ns_only_pre ++ [(Finite n, 0) | n <- primitiveUints]
-    natLiteralIndices = buildLookupMap nats
+    ns = sortOn fst natsUnordered ++ [(Finite n, 0) | n <- primitiveUints]
+    -- As it is hard to distinguish whether each Nat literal is used in a plain or a bitwise ring (if it is used in a Nat-polymorphic function),
+    -- create both a plain and a bitwise ring for each Nat but omit bitwise rings with more than maxBitsInBitwiseRing bits to avoid running out of memory.
+    isBitwiseAllowed :: ExtendedNatural -> Bool
+    isBitwiseAllowed Infinite = True
+    isBitwiseAllowed (Finite n) = n <= maxBitsInBitwiseRing
+    allRings = [(PlainRing n, count) | (n, count) <- ns] ++ [(BitwiseRing n, count) | (n, count) <- ns, isBitwiseAllowed n]
+    postRings = map mainRingToRing (_supportedRings testData)
+    (rings_post, rings_only_pre) = partition ((`elem` postRings) . fst) allRings
+    rings = (PlainRing Infinite, 0) : rings_post ++ rings_only_pre ++ [(BitwiseRing Infinite, 0)]
+    ringLiteralIndices = buildLookupMap rings
     strLiterals = buildFreqList [s | ConstString s <- literals]
     strLiteralIndices = buildLookupMap strLiterals
   in withMaybeFile mOutputPath $ \handle -> do
@@ -1308,9 +1389,9 @@ coreToRust senv mOutputPath testData prog@CoreProgram{..} =
     let globalFunMap = Map.fromList $ flip map globalFunList $ \ (_, (fvar, TForAll ts _ _, (vs, _), _, _, _, _)) -> (fvar, (length $ filter (isKindPassed . tyVarKind) ts, length vs))
     let ctx = Ctx { _indent = indent, _lineFinished = lineFinished, _recursiveVars = recursiveVars,
                     _literalIndices = literalIndices,
-                    _natLiteralIndices = natLiteralIndices,
+                    _ringLiteralIndices = ringLiteralIndices,
                     _strLiteralIndices = strLiteralIndices,
-                    _numPostModuli = length ns_post,
+                    _numPostModuli = length rings_post,
                     _refArgMap = refArgMap,
                     _globalFunMap = globalFunMap,
                     _externSet = externSet,
@@ -1329,6 +1410,7 @@ coreToRust senv mOutputPath testData prog@CoreProgram{..} =
         let
           kindToRust = \case
             KindNat -> "&NatType"
+            KindRing -> "&NatType"
             KindStage -> "StageType"
             KindDomain -> "DomainType"
             KindStar -> "QualifiedType"
@@ -1375,8 +1457,8 @@ coreToRust senv mOutputPath testData prog@CoreProgram{..} =
         let isAnyArgRef = any (\case PassByRef -> True; _ -> False) argPassingStyles
         when (isSieve && not isLambda) $ do
           let ?ctx = ctx in do
-            let outputModuli = sizedTypeToRefNatTypesRust resType
-            let inputModuli = map sizedTypeToRefNatTypesRust argTypes
+            let outputModuli = sizedTypeToRefRingTypesRust resType
+            let inputModuli = map sizedTypeToRefRingTypesRust argTypes
             writeLine ctx ""
             writeLine ctx $ "fn " ++ fname ++ "_moduli<'a>(ctx: &'a ContextRef" ++ concatMap ((", " ++) . addLifetimes) typeArgDecls ++ ") -> (SoA<&'a NatType>, Vec<SoA<&'a NatType>>) {"
             withIncreasedIndent ctx $
@@ -1390,6 +1472,7 @@ coreToRust senv mOutputPath testData prog@CoreProgram{..} =
           else let ?ctx = ctx in do
             let get_te t = case tyVarKind t of
                              KindNat -> Just "nat"
+                             KindRing -> Just "nat"
                              KindStage -> Just "stage"
                              KindDomain -> Just "domain"
                              KindStar -> Just "qualified"

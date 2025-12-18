@@ -14,6 +14,7 @@ use crate::stack::Stack;
 use crate::sieve::*;
 use crate::builtins::*;
 use crate::generated::*;
+use crate::zksc_integer::BitwiseBigInt;
 use num_bigint::BigInt;
 use std::{
     rc::Rc,

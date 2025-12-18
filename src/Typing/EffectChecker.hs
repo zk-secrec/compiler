@@ -539,9 +539,9 @@ ecTypeEff t
             case u of
               TUnit
                 -> return id
-              TBool _
+              TBin _
                 -> return standard
-              TUInt _
+              TInt _
                 -> return standard
               TString
                 -> return (d :)

@@ -108,9 +108,18 @@ pub fn tcast_unqual<'b, 'a : 'b>(stack: &'b Stack, t: &'a Type<'a>, d: DomainTyp
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RingType {
+    RingAdditive,
+    RingBitwise,
+}
+
+pub use RingType::*;
+
 #[derive(Clone)]
 pub struct NatType {
     pub tag: u64,
+    pub ring_type: RingType,
     pub modulus: Option<BigInt>,
     pub modulus_value: fn() -> Value,
     pub is_zero : fn(&Value) -> bool,

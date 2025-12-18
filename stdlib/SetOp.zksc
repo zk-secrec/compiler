@@ -40,7 +40,7 @@ fn occurrences[N : Nat, @D](xs : list[uint[N] $pre @D], ys : list[uint[N] $pre @
 }
 
 pub fn assert_subset_norep[N : Nat, @D](xs : list[uint[N] $post @prover], ys : list[uint[N] $post @D]) 
-  where Field[N], Challenge[N] {
+  where Field[N], Challenge[plain[N]] {
   let n = length(xs);
   let m = length(ys);
   let xs_prover = for i in 0 .. n { xs[i] as @prover };
@@ -58,7 +58,7 @@ pub fn assert_subset_norep[N : Nat, @D](xs : list[uint[N] $post @prover], ys : l
 }
 
 pub fn assert_subset[N : Nat, @D](xs : list[uint[N] $post @prover], ys : list[uint[N] $post @D]) 
-  where Field[N], Challenge[N] {
+  where Field[N], Challenge[plain[N]] {
   let n = length(xs);
   let m = length(ys);
   let xs_prover = for i in 0 .. n { xs[i] as @prover };
@@ -75,7 +75,7 @@ pub fn assert_subset[N : Nat, @D](xs : list[uint[N] $post @prover], ys : list[ui
 }
 
 pub fn assert_disjoint[N : Nat](xs : list[uint[N] $post @verifier], ys : list[uint[N] $post @prover], ref sizeasserter : SizeAsserter[N, $post, @prover])
-  where Field[N], Challenge[N] {
+  where Field[N], Challenge[plain[N]] {
   let n = length(xs);
   let m = length(ys);
   let zs = is_from_first(xs, ys, ref sizeasserter);

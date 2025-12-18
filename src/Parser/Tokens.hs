@@ -20,6 +20,8 @@ data Token
   | TokAs
   | TokAssign
   | TokAt
+  | TokBin
+  | TokBitwise
   | TokBool
   | TokBreak
   | TokChallenge
@@ -63,7 +65,8 @@ data Token
   | TokInfix
   | TokInfixL
   | TokInfixR
-  | TokInt Integer
+  | TokInt
+  | TokInteger Integer
   | TokLet
   | TokList
   | TokLte
@@ -74,8 +77,11 @@ data Token
   | TokParenLeft
   | TokParenRight
   | TokPermutationCheck
+  | TokPlain
   | TokPlus
   | TokPost
+  | TokPostRing
+  | TokPostConvertible
   | TokPre
   | TokProver
   | TokPub
@@ -84,6 +90,7 @@ data Token
   | TokRec
   | TokRef
   | TokReturn
+  | TokRing
   | TokSelfId
   | TokSelfType
   | TokSemiColon

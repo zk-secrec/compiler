@@ -489,7 +489,7 @@ pub fn bool_downcast[N : Nat, $S, @D](b : bool[N] $pre @D) -> bool[N] $S @D
 
 unchecked eff * -> [*] ! @public
 pub fn nonzero_challenge[P : Nat](n : uint $pre @public) -> list[uint[P] $pre @verifier]
-  where Field[P], Challenge[P] {
+  where Field[P], Challenge[plain[P]] {
   let res : list[uint[P] $pre @verifier] = challenge(n);
   if (prod(res) == 0) { nonzero_challenge(n) } else { res }
 }

@@ -275,9 +275,9 @@ tcTypePred tp@(TypePred _ _ l) = tcSetLoc l $ case tp of
   PredPost t _ -> PredPost <$> tcType KindStage t <*> pure l
   PredArray t _ -> PredArray <$> tcType (KindStar `KindFun` KindUnqualified) t <*> pure l
   PredSized t _ -> PredSized <$> tcType KindStar t <*> pure l
-  PredField t _ -> PredField <$> tcType KindNat t <*> pure l
-  PredChallenge t _ -> PredChallenge <$> tcType KindNat t <*> pure l
-  PredConvertible t1 t2 _ -> PredConvertible <$> tcType KindNat t1 <*> tcType KindNat t2 <*> pure l
+  PredPostRing t _ -> PredPostRing <$> tcType KindRing t <*> pure l
+  PredPostConvertible t1 t2 _ -> PredPostConvertible <$> tcType KindRing t1 <*> tcType KindRing t2 <*> pure l
+  PredChallenge t _ -> PredChallenge <$> tcType KindRing t <*> pure l
   PredExtendedArithmetic _ -> PredExtendedArithmetic <$> pure l
   PredPermutationCheck _ -> PredPermutationCheck <$> pure l
   PredVectors _ -> PredVectors <$> pure l

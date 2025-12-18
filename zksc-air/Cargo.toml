@@ -1,0 +1,25 @@
+[package]
+name = "zkair"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# ICICLE dependencies
+icicle-runtime = { git = "https://github.com/ingonyama-zk/icicle.git", tag = "v4.0.0" }
+icicle-core = { git = "https://github.com/ingonyama-zk/icicle.git", tag = "v4.0.0" }
+icicle-babybear = { git = "https://github.com/ingonyama-zk/icicle.git", tag = "v4.0.0" }
+
+# air-icicle for symbolic constraints
+icicle-trace = { git = "https://github.com/ingonyama-zk/air-icicle.git", branch = "main" }
+
+# Plonky3 matrix
+p3-matrix = { git = "https://github.com/Plonky3/Plonky3.git" }
+
+# Utilities
+tracing = "0.1"
+tracing-subscriber = "0.3"
+instant = "0.1"
+
+[dev-dependencies]
+# For timing benchmarks in examples
+instant = "0.1"

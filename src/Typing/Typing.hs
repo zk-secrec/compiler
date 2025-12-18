@@ -851,25 +851,25 @@ tcExpr resTy (Cast e t) = do
 
 tcExpr resTy (DbgAssert e1 me2) = do
   l <- tcGetLoc
-  n <- tcFreshNatTy
-  let t = mkUnqualBool n
+  r <- tcFreshRingTy
+  let t = mkUnqualBin r
   d <- tcFreshDomainTy
-  let boolTy = mkQualifiedL t mkPre d l
+  let binTy = mkQualifiedL t mkPre d l
   let strTy = mkQualifiedL (mkCon ConString) mkPre d l
-  e1' <- tcExprA boolTy e1
+  e1' <- tcExprA binTy e1
   me2' <- traverse (tcExprA strTy) me2
   tcUnifyTypes resTy mkTypeUnit
   return $ DbgAssert e1' me2'
 
 tcExpr resTy (DbgAssertEq e1 e2 me3) = do
   l <- tcGetLoc
-  n <- tcFreshNatTy
-  let t = mkUnqualUInt n
+  r <- tcFreshRingTy
+  let t = mkUnqualInt r
   d <- tcFreshDomainTy
-  let uintTy = mkQualifiedL t mkPre d l
+  let intTy = mkQualifiedL t mkPre d l
   let strTy = mkQualifiedL (mkCon ConString) mkPre d l
-  e1' <- tcExprA uintTy e1
-  e2' <- tcExprA uintTy e2
+  e1' <- tcExprA intTy e1
+  e2' <- tcExprA intTy e2
   me3' <- traverse (tcExprA strTy) me3
   tcUnifyTypes resTy mkTypeUnit
   return $ DbgAssertEq e1' e2' me3'
@@ -882,14 +882,14 @@ tcExpr resTy (IfThenElse e1 e2 e3) = do
     Just p -> do
       p' <- tcTypePred p
       case p' of
-        PredField n _           -> tcAddWanted (PredTestField n NoLocation)
-        PredChallenge n _       -> tcAddWanted (PredTestChallenge n NoLocation)
-        PredConvertible n1 n2 _ -> tcAddWanted (PredTestConvertible n1 n2 NoLocation)
-        PredExtendedArithmetic _ -> tcAddWanted (PredTestExtendedArithmetic NoLocation)
-        PredObliviousChoice _   -> tcAddWanted (PredTestObliviousChoice NoLocation)
-        PredPermutationCheck _   -> tcAddWanted (PredTestPermutationCheck NoLocation)
-        PredVectors _            -> tcAddWanted (PredTestVectors NoLocation)
-        _                        -> return ()
+        PredPostRing r _            -> tcAddWanted (PredTestPostRing r NoLocation)
+        PredPostConvertible r1 r2 _ -> tcAddWanted (PredTestPostConvertible r1 r2 NoLocation)
+        PredChallenge r _           -> tcAddWanted (PredTestChallenge r NoLocation)
+        PredExtendedArithmetic _    -> tcAddWanted (PredTestExtendedArithmetic NoLocation)
+        PredObliviousChoice _       -> tcAddWanted (PredTestObliviousChoice NoLocation)
+        PredPermutationCheck _      -> tcAddWanted (PredTestPermutationCheck NoLocation)
+        PredVectors _               -> tcAddWanted (PredTestVectors NoLocation)
+        _                           -> return ()
       tcWithNextLevel $
         tcSetBranchDomain mkPublicDomain $ do
           let unitExpr = Lit ConstUnit
@@ -905,7 +905,7 @@ tcExpr resTy (IfThenElse e1 e2 e3) = do
     Nothing -> do
       natTy <- tcSetLoc brLoc tcFreshNatTy
       condDomTy <- tcSetLoc brLoc tcFreshDomainTy
-      let condTy = mkQualifiedL (mkUnqualBool natTy) mkPre condDomTy brLoc
+      let condTy = mkQualifiedL (mkUnqualBin (mkPlain natTy)) mkPre condDomTy brLoc
       e1' <- tcExprA condTy e1
       tcSetBranchDomain condDomTy $ do
         e2' <- tcExprA resTy e2
@@ -916,12 +916,12 @@ tcExpr resTy (Match e cases) = do
   loc <- tcGetLoc
   tcAddWanted (PredObliviousChoice loc)
   let topLoc = location e
-  natTy <- tcSetLoc topLoc tcFreshNatTy
-  tcAddWanted (PredField natTy topLoc)
+  ringTy <- tcSetLoc topLoc tcFreshRingTy
+  tcAddWanted (PredPostRing ringTy topLoc)
   topDomTy <- tcSetLoc topLoc tcFreshDomainTy
-  let topTy = mkQualifiedL (mkUnqualUInt natTy) mkPost topDomTy topLoc
+  let topTy = mkQualifiedL (mkUnqualInt ringTy) mkPost topDomTy topLoc
   e' <- tcExprA topTy e
-  tcSetBranchDomain topDomTy $ Match e' <$> traverse (tcCase (natTy, resTy)) cases
+  tcSetBranchDomain topDomTy $ Match e' <$> traverse (tcCase (ringTy, resTy)) cases
   
 tcExpr _resTy (Call _ Method{} _vs _es) = tcFatal "TODO: method calls not implemented"
 
@@ -966,7 +966,7 @@ tcExpr resTy (While cond body) = do
   let l = location cond
   natTy <- tcSetLoc l tcFreshNatTy
   d <- tcSetLoc l tcFreshDomainTy
-  let boolTy = mkQualifiedL (mkUnqualBool natTy) mkPre d l
+  let boolTy = mkQualifiedL (mkUnqualBin (mkPlain natTy)) mkPre d l
   cond' <- tcExprA boolTy cond
   body' <- tcSetInForStmt $ tcExprA mkTypeUnit body
   tcUnifyTypes resTy mkTypeUnit
@@ -1232,12 +1232,12 @@ tcCastStage resTy e tarStage = do
 tcLit :: Type Var -> Constant -> TcM ()
 tcLit resTy (ConstInt _) = do
   (u, _, _) <- tcSplitQualifiedType resTy
-  natTy <- tcFreshNatTy
-  tcUnifyTypes u (mkUnqualUInt natTy)
+  ringTy <- tcFreshRingTy
+  tcUnifyTypes u (mkUnqualInt ringTy)
 tcLit resTy (ConstBool _) = do
   (u, _, _) <- tcSplitQualifiedType resTy
-  natTy <- tcFreshNatTy
-  tcUnifyTypes u (mkUnqualBool natTy)
+  ringTy <- tcFreshRingTy
+  tcUnifyTypes u (mkUnqualBin ringTy)
 tcLit resTy (ConstString _) = do
   d <- tcFreshDomainTy
   let strTy = mkQualified (mkCon ConString) mkPre d
@@ -1387,7 +1387,7 @@ tcTyVar resTy var
   | tyVarKind var == KindNat = do
     l <- tcGetLoc
     (u, _, _) <- tcSplitQualifiedType resTy
-    tcUnifyTypes u $ TApp (TCon ConUInt l) [TCon (ConNat Infinite) l] l
+    tcUnifyTypes u $ TApp (TCon ConInt l) [TApp (TCon ConPlain l) [TCon (ConNat Infinite) l] l] l
     return $ TypeToExpr (TVar var KindNat l)
   | otherwise = tcThrowErr "Only type variables with Nat kind may occur in expressions."
 
@@ -1415,6 +1415,9 @@ tcFreshPreUintN = do
 
 tcFreshNatTy :: TcM (NatType Var)
 tcFreshNatTy = tcFreshMetaTy KindNat
+
+tcFreshRingTy :: TcM (RingType Var)
+tcFreshRingTy = tcFreshMetaTy KindRing
 
 -- Location of expression that has been type annotated.
 -- Useful if we need to get expression location after type checking.

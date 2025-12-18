@@ -44,7 +44,7 @@ fn is_from_first_pre[N : Nat](x : list[uint[N] $pre @verifier], y : list[uint[N]
 }
 
 pub fn is_from_first[N : Nat](x : list[uint[N] $post @verifier], y : list[uint[N] $post @prover], ref sizeasserter : SizeAsserter[N, $post, @prover]) -> list[bool[N] $post @prover] 
-  where Field[N], Challenge[N] {
+  where Field[N], Challenge[plain[N]] {
     let result = uint_list_to_post(is_from_first_pre(uint_list_to_pre(x), uint_list_to_pre(y)));
     let all_values = append(uint_list_to_prover(x), y);
     let sort_perm = __get_sorting_permutation(for i in 0 .. length(all_values) { all_values[i] as $pre as uint });
@@ -77,7 +77,7 @@ pub fn is_from_first[N : Nat](x : list[uint[N] $post @verifier], y : list[uint[N
 
 // Assumes 8-bit characters
 fn string_is_from_first_helper[N : Nat](instances : list[String[$post, @verifier, N]], witnesses : list[String[$post, @prover, N]], r : uint[N] $post @verifier, ref sizeasserter : SizeAsserter[N, $post, @prover]) -> list[bool[N] $post @prover]
-where Field[N], Challenge[N]
+where Field[N], Challenge[plain[N]]
 { let instance_codes = for i in 0 .. length(instances) 
   { eval_string(instances[i], r) 
   }
@@ -89,7 +89,7 @@ where Field[N], Challenge[N]
 
 // Assumes 8-bit characters
 pub fn string_is_from_first[N : Nat](instances : list[String[$post, @verifier, N]], witnesses : list[String[$post, @prover, N]], ref sizeasserter : SizeAsserter[N, $post, @prover]) -> list[bool[N] $post @prover]
-where Field[N], Challenge[N]
+where Field[N], Challenge[plain[N]]
 { let num_instances = length(instances)
 ; let num_witnesses = length(witnesses)
 ; let results = string_is_from_first_helper(instances, witnesses, 256, ref sizeasserter)
@@ -123,7 +123,7 @@ where Field[N]
 // Assumes 8-bit characters
 unchecked eff [*] -> [*] -> [*] -> [*] -> * -> [*,*,[*]] -> [*] ! @public
 fn is_prefixed_from_first_helper[N : Nat, $S](xs : list[uint[N] $S @verifier], ys : list[uint[N] $S @prover], xlens : list[uint[N] $S @verifier], ylens : list[uint[N] $S @prover], maxlen : u64 $pre @public, ref sizeasserter : SizeAsserter[N, $post, @prover]) -> list[uint[N] $S @prover]
-where Field[N], Challenge[N]
+where Field[N], Challenge[plain[N]]
 { let all_vals = append(uint_list_to_prover(xs), ys)
 ; let all_lens = append(uint_list_to_prover(xlens), ylens)
 ; let sort_perm = __get_sorting_permutation(for i in 0 .. length(all_vals) { all_vals[i] as $pre as uint })
@@ -173,7 +173,7 @@ where Field[N], Challenge[N]
 // Assumes 8-bit characters
 unchecked eff [*] -> [*] -> [*] -> [*] -> * -> [*,*,[*]] -> [*] ! @public
 pub fn is_prefixed_from_first[N : Nat](xs : list[uint[N] $post @verifier], ys : list[uint[N] $post @prover], xlens : list[uint[N] $post @verifier], ylens : list[uint[N] $post @prover], maxlen : u64 $pre @public, ref sizeasserter : SizeAsserter[N, $post, @prover]) -> list[bool[N] $post @prover]
-where Field[N], Challenge[N]
+where Field[N], Challenge[plain[N]]
 { /*
   dbg_print("xs:" : string $pre @public)
 ; for i in 0 .. length(xs) { dbg_print(to_string(xs[i] as $pre)) }

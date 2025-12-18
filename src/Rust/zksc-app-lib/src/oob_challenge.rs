@@ -16,7 +16,7 @@ use std::{
 };
 
 use num_bigint::RandBigInt;
-use num_traits::Zero;
+use num_traits::{Zero, One, ToPrimitive};
 
 use crate::{consts::*, integer::*, sieve::*, zksc_types::*, Value, rep};
 
@@ -81,10 +81,16 @@ impl OobChallengeBackend {
     }
 
     fn challenge1(&self, sieve: &dyn SIEVEIR, m: &NatType) -> Value {
-        let m_bi = &match m.modulus {
+        let mut m_bi = match m.modulus {
             Some(ref m) => m,
             _ => panic!("Infinite modulus not supported in $post"),
         };
+        let m_bitwise;
+        if m.ring_type == RingBitwise {
+            // for bitwise rings, m.modulus contains the number of bits, not the modulus
+            m_bitwise = Integer::one() << m_bi.to_usize().unwrap();
+            m_bi = &m_bitwise;
+        }
         match CURR_DOMAIN {
             Public => panic!("Not expecting public domain"),
             Verifier => {

@@ -147,21 +147,21 @@ impliedByGiven (PredEq d1 d2 l) p
   | TDomain TVPublic <- d2 = impliedByGiven (PredSub d1 d2 l) p
 impliedByGiven (PredSub d1 d2 _) (PredSub d1' d2' _) =
   d1 == d1' && d2 == d2'
-impliedByGiven (PredField n _) (PredField m _) = n == m
+impliedByGiven (PredPostRing r _) (PredPostRing r' _) = r == r'
 impliedByGiven (PredSized t _) (PredSized t' _) = t == t'
 impliedByGiven (PredArray t _) (PredArray t' _) = t == t'
-impliedByGiven (PredChallenge n _) (PredChallenge m _) = n == m
-impliedByGiven (PredConvertibleTo (TQualify (TUInt n1) _ _) (TUInt n2) _) (PredConvertible n1' n2' _) = n1 == n1' && n2 == n2'
-impliedByGiven (PredConvertibleTo (TQualify (TBool n1) _ _) (TBool n2) _) (PredConvertible n1' n2' _) = n1 == n1' && n2 == n2'
-impliedByGiven (PredConvertible n1 n2 _) (PredConvertible n1' n2' _) = n1 == n1' && n2 == n2'
+impliedByGiven (PredChallenge r _) (PredChallenge r' _) = r == r'
+impliedByGiven (PredConvertibleTo (TQualify (TInt r1) _ _) (TInt r2) _) (PredPostConvertible r1' r2' _) = r1 == r1' && r2 == r2'
+impliedByGiven (PredConvertibleTo (TQualify (TBin r1) _ _) (TBin r2) _) (PredPostConvertible r1' r2' _) = r1 == r1' && r2 == r2'
+impliedByGiven (PredPostConvertible r1 r2 _) (PredPostConvertible r1' r2' _) = r1 == r1' && r2 == r2'
 impliedByGiven (PredExtendedArithmetic _) (PredExtendedArithmetic _) = True
 impliedByGiven (PredPermutationCheck _) (PredPermutationCheck _) = True
 impliedByGiven (PredVectors _) (PredVectors _) = True
 impliedByGiven (PredVectorization _) (PredVectorization _) = True
 impliedByGiven (PredObliviousChoice _) (PredObliviousChoice _) = True
-impliedByGiven (PredTestField n _) (PredField m _) = n == m
-impliedByGiven (PredTestChallenge n _) (PredChallenge m _) = n == m
-impliedByGiven (PredTestConvertible n1 n2 _) (PredConvertible n1' n2' _) = n1 == n1' && n2 == n2'
+impliedByGiven (PredTestPostRing r _) (PredPostRing r' _) = r == r'
+impliedByGiven (PredTestPostConvertible r1 r2 _) (PredPostConvertible r1' r2' _) = r1 == r1' && r2 == r2'
+impliedByGiven (PredTestChallenge r _) (PredChallenge r' _) = r == r'
 impliedByGiven (PredTestExtendedArithmetic _) (PredExtendedArithmetic _) = True
 impliedByGiven (PredTestPermutationCheck _) (PredPermutationCheck _) = True
 impliedByGiven (PredTestVectors _) (PredVectors _) = True
@@ -269,17 +269,17 @@ tryElimPred tp@(TypePred _ _ l) level = case tp of
   PredHasDefaultValue path t l -> tryElimHasDefaultValue path t l
   PredArray t l -> return $ tryElimArray t l
   PredSized t l -> tryElimSized t l
-  PredField n _ -> return $ tryElimField n
-  PredChallenge n _ -> return $ tryElimChallenge n
-  PredConvertible n1 n2 _ -> return $ tryElimConvertible n1 n2
+  PredPostRing r _ -> return $ tryElimPostRing r
+  PredPostConvertible r1 r2 _ -> return $ tryElimPostConvertible r1 r2
+  PredChallenge r _ -> return $ tryElimChallenge r
   PredExtendedArithmetic _ -> return $ tryElimExtendedArithmetic
   PredPermutationCheck _ -> return $ tryElimPermutationCheck
   PredVectors _ -> return $ tryElimVectors
   PredVectorization _ -> return $ tryElimVectorization
   PredObliviousChoice _ -> return $ tryElimObliviousChoice
-  PredTestField _ _ -> return $ Delay
+  PredTestPostRing _ _ -> return $ Delay
+  PredTestPostConvertible _ _ _ -> return $ Delay
   PredTestChallenge _ _ -> return $ Delay
-  PredTestConvertible _ _ _ -> return $ Delay
   PredTestExtendedArithmetic _ -> return $ Delay
   PredTestPermutationCheck _ -> return $ Delay
   PredTestVectors _ -> return $ Delay
@@ -300,8 +300,8 @@ tryElimSized q l
   where
     go (TQualify t _ _)         = go t
     go TUnit                    = return mkRemove
-    go TBool{}                  = return mkRemove
-    go TUInt{}                  = return mkRemove
+    go TBin{}                   = return mkRemove
+    go TInt{}                   = return mkRemove
     go (TTuple ts)              = foldr (<>) mkRemove <$> traverse go ts
     go (TApp (TVar x _ _) ts _) = goStruct x ts
     go (TVar x _ _)             = goStruct x []
@@ -324,18 +324,18 @@ tryElimSized q l
         Just self -> go self
         _         -> tcSetLoc l $ tcThrowErr "Self type undefined."
 
-tryElimField :: NatType Var -> ElimResult
-tryElimField _ = Delay
+tryElimPostRing :: RingType Var -> ElimResult
+tryElimPostRing _ = Delay
 
-tryElimChallenge :: NatType Var -> ElimResult
-tryElimChallenge _ = Delay
-
-tryElimConvertible :: NatType Var -> NatType Var -> ElimResult
-tryElimConvertible m m'
+tryElimPostConvertible :: RingType Var -> RingType Var -> ElimResult
+tryElimPostConvertible m m'
   | m == m'
     = mkRemove
   | otherwise
     = Delay
+
+tryElimChallenge :: NatType Var -> ElimResult
+tryElimChallenge _ = Delay
 
 tryElimExtendedArithmetic :: ElimResult
 tryElimExtendedArithmetic = Delay
@@ -355,24 +355,24 @@ tryElimObliviousChoice = Delay
 tryElimConvertibleTo :: Type Var -> UnqualifiedType Var -> Location -> ElimResult
 tryElimConvertibleTo t1 t2 l = go (simpType t1) (simpType t2)
   where
-    go (TQualify (TBool m) _ _) (TUInt m')
-      | m == m'
+    go (TQualify (TBin r) _ _) (TInt r')
+      | r == r'
         = mkRemove
-    go (TQualify (TUInt m) s _) (TUInt m')
-      = helper s m m' l
-    go (TQualify (TBool m) s _) (TBool m')
-      = helper s m m' l
+    go (TQualify (TInt r) s _) (TInt r')
+      = helper s r r' l
+    go (TQualify (TBin r) s _) (TBin r')
+      = helper s r r' l
     go _                         _
       = Delay
-    helper s m m' l
-      | m == m'
+    helper s r r' l
+      | r == r'
         = mkRemove
       | otherwise
         = case s of
             TStage TVPre
               -> mkRemove
             TStage TVPost
-              -> Split [PredConvertible m m' l]
+              -> Split [PredPostConvertible r r' l]
             _ -> Delay
         
 tryElimHasField :: Type Var -> Either Int Text -> Type Var -> Location -> TcM ElimResult
@@ -430,6 +430,8 @@ tryElimMutableComponent d t l = go t
     goQ (TGetUnqual t) _ _ = go t
     goQ TUInt{} s _ = return $ goPrim s
     goQ TBool{} s _ = return $ goPrim s
+    goQ (TInt (TBitwise{})) s _ = return $ goPrim s
+    goQ (TBin (TBitwise{})) s _ = return $ goPrim s
     goQ TString{} s _ = return $ goPre s -- TODO: String could already be assumed to be $pre?
     goQ TUnit{} _ _ = return mkRemove
     goQ (TList t) s d' = return $ Split [PredMutableComponent d' t l] <> goPre s
@@ -461,8 +463,8 @@ tryElimQualify _ _ = Delay
 -- class AssertEq t1 t2 where
 --    assert_eq :  t1 $post @d -> t2 $post @d -> unit $pre @d
 tryElimAssertEq :: UnqualifiedType Var -> UnqualifiedType Var -> Location -> ElimResult
-tryElimAssertEq (TUInt m) (TUInt n) l = Split [PredField m l, PredField n l]
-tryElimAssertEq (TBool m) (TBool n) l = Split [PredField m l, PredField n l]
+tryElimAssertEq (TUInt m) (TUInt n) l = Split [predField m l, predField n l]
+tryElimAssertEq (TBool m) (TBool n) l = Split [predField m l, predField n l]
 tryElimAssertEq _         _         _ = Delay
 
 tryElimToString :: UnqualifiedType Var -> Location -> ElimResult
@@ -471,8 +473,8 @@ tryElimToString t l = go (simpType t)
     tryElimToString' t = tryElimToString t l
 
     go (TQualify t s _) = tryElimToString' t <> Split [PredEq s mkPre l]
-    go TBool{}          = mkRemove
-    go TUInt{}          = mkRemove
+    go TBin{}           = mkRemove
+    go TInt{}           = mkRemove
     go TString{}        = mkRemove
     go (TTuple t)       = sconcat $ mkRemove :| fmap tryElimToString' t
     go (TList t)        = tryElimToString' t
@@ -741,10 +743,10 @@ tryElimWireUnqualified shapeTy fromTy toTy loc = tcSetLoc loc $
 
     -- scalars
     (f, t) | isScalar f || isScalar t -> let
-         mods = catMaybes [scalarMod f, scalarMod t]
+         rings = catMaybes [scalarRing f, scalarRing t]
        in
        scalar $
-             [ PredField (head mods) loc
+             [ PredPostRing (head rings) loc
              , PredEq shapeTy (mkCon ConUnit) loc
              , PredEq fromTy toTy loc
              ]
@@ -756,11 +758,11 @@ tryElimWireUnqualified shapeTy fromTy toTy loc = tcSetLoc loc $
     compound = return . ElimWireCompoundConstraints
     list = return . ElimWireListConstraints
 
-    scalarMod (TUInt m) = Just m
-    scalarMod (TBool m) = Just m
-    scalarMod _         = Nothing
+    scalarRing (TInt r) = Just r
+    scalarRing (TBin r) = Just r
+    scalarRing _        = Nothing
     
-    isScalar = isJust . scalarMod
+    isScalar = isJust . scalarRing
 
 tryElimWire :: Type Var -> Type Var -> Type Var -> Location -> TcM ElimResult
 tryElimWire shape from to loc =
